@@ -4,9 +4,9 @@ Cloud AI Control Verifier (`cai-verify`) is an AWS-first, open-source tool for
 executing focused security-control tests against deployed AI applications and
 producing machine-readable evidence.
 
-This repository currently contains the Python project scaffold and version
-command only. It does not implement control tests or establish HIPAA, FedRAMP,
-NIST, or legal compliance.
+This repository currently contains the Python project scaffold, version
+command, and core assertion-result semantics. It does not implement control
+tests or establish HIPAA, FedRAMP, NIST, or legal compliance.
 
 ## Requirements
 
@@ -56,7 +56,6 @@ network or AWS.
 | `make build`     | Build and validate the source and wheel artifacts    |
 | `make audit`     | Audit locked dependencies for known vulnerabilities  |
 | `make check`     | Run lint, types, tests, docs, and package validation |
-
 
 ## License
 
