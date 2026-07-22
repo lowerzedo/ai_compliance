@@ -47,12 +47,65 @@
       "title": "ActionInput",
       "type": "object"
     },
+    "ApplicationStatusAssertion": {
+      "additionalProperties": false,
+      "description": "Require one HTTP action to return an exact status code.",
+      "properties": {
+        "actionRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "controlRefs": {
+          "items": {
+            "$ref": "#/$defs/ControlReference"
+          },
+          "minItems": 1,
+          "title": "Controlrefs",
+          "type": "array"
+        },
+        "expectedStatus": {
+          "maximum": 599,
+          "minimum": 100,
+          "title": "Expectedstatus",
+          "type": "integer"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/Limitation"
+          },
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "type": {
+          "const": "application.status",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "controlRefs",
+        "limitations",
+        "type",
+        "actionRef",
+        "expectedStatus"
+      ],
+      "title": "ApplicationStatusAssertion",
+      "type": "object"
+    },
     "Assertion": {
       "discriminator": {
         "mapping": {
+          "application.status": "#/$defs/ApplicationStatusAssertion",
+          "audit.event-present": "#/$defs/AuditEventPresentAssertion",
+          "audit.principal-correlated": "#/$defs/AuditPrincipalCorrelatedAssertion",
           "auditCorrelation": "#/$defs/AuditCorrelationAssertion",
           "encryption": "#/$defs/EncryptionAssertion",
           "providerBoundary": "#/$defs/ProviderBoundaryAssertion",
+          "telemetry.canary-absent": "#/$defs/TelemetryCanaryAbsentAssertion",
           "telemetryCanary": "#/$defs/TelemetryCanaryAssertion",
           "unauthorizedIdentityDenied": "#/$defs/UnauthorizedIdentityAssertion"
         },
@@ -73,6 +126,18 @@
         },
         {
           "$ref": "#/$defs/EncryptionAssertion"
+        },
+        {
+          "$ref": "#/$defs/ApplicationStatusAssertion"
+        },
+        {
+          "$ref": "#/$defs/TelemetryCanaryAbsentAssertion"
+        },
+        {
+          "$ref": "#/$defs/AuditEventPresentAssertion"
+        },
+        {
+          "$ref": "#/$defs/AuditPrincipalCorrelatedAssertion"
         }
       ]
     },
@@ -161,6 +226,102 @@
         "probeRef"
       ],
       "title": "AuditCorrelationAssertion",
+      "type": "object"
+    },
+    "AuditEventPresentAssertion": {
+      "additionalProperties": false,
+      "description": "Require a named audit event correlated to a completed action.",
+      "properties": {
+        "actionRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "controlRefs": {
+          "items": {
+            "$ref": "#/$defs/ControlReference"
+          },
+          "minItems": 1,
+          "title": "Controlrefs",
+          "type": "array"
+        },
+        "eventName": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/Limitation"
+          },
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "probeRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "type": {
+          "const": "audit.event-present",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "controlRefs",
+        "limitations",
+        "type",
+        "actionRef",
+        "probeRef",
+        "eventName"
+      ],
+      "title": "AuditEventPresentAssertion",
+      "type": "object"
+    },
+    "AuditPrincipalCorrelatedAssertion": {
+      "additionalProperties": false,
+      "description": "Require an audit event principal to match the action principal.",
+      "properties": {
+        "actionRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "controlRefs": {
+          "items": {
+            "$ref": "#/$defs/ControlReference"
+          },
+          "minItems": 1,
+          "title": "Controlrefs",
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/Limitation"
+          },
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "probeRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "type": {
+          "const": "audit.principal-correlated",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "controlRefs",
+        "limitations",
+        "type",
+        "actionRef",
+        "probeRef"
+      ],
+      "title": "AuditPrincipalCorrelatedAssertion",
       "type": "object"
     },
     "AwsAccountId": {
@@ -678,7 +839,8 @@
       "discriminator": {
         "mapping": {
           "awsAssumeRole": "#/$defs/AssumedRoleIdentity",
-          "awsCurrent": "#/$defs/CurrentAwsIdentity"
+          "awsCurrent": "#/$defs/CurrentAwsIdentity",
+          "syntheticLocal": "#/$defs/SyntheticLocalIdentity"
         },
         "propertyName": "type"
       },
@@ -688,6 +850,9 @@
         },
         {
           "$ref": "#/$defs/AssumedRoleIdentity"
+        },
+        {
+          "$ref": "#/$defs/SyntheticLocalIdentity"
         }
       ]
     },
@@ -767,6 +932,61 @@
       "title": "LiteralInput",
       "type": "object"
     },
+    "LocalTelemetryProbe": {
+      "additionalProperties": false,
+      "description": "Read normalized records from the in-process synthetic telemetry sink.",
+      "properties": {
+        "actionRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "identityRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Identifier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "maxAge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FreshnessString"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/ObservationKind"
+          },
+          "minItems": 1,
+          "title": "Observations",
+          "type": "array"
+        },
+        "type": {
+          "const": "localTelemetry",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "actionRef",
+        "observations",
+        "type"
+      ],
+      "title": "LocalTelemetryProbe",
+      "type": "object"
+    },
     "NonEmptyString": {
       "maxLength": 4096,
       "minLength": 1,
@@ -792,7 +1012,8 @@
       "discriminator": {
         "mapping": {
           "cloudTrail": "#/$defs/CloudTrailProbe",
-          "cloudWatchLogs": "#/$defs/CloudWatchLogsProbe"
+          "cloudWatchLogs": "#/$defs/CloudWatchLogsProbe",
+          "localTelemetry": "#/$defs/LocalTelemetryProbe"
         },
         "propertyName": "type"
       },
@@ -802,6 +1023,9 @@
         },
         {
           "$ref": "#/$defs/CloudTrailProbe"
+        },
+        {
+          "$ref": "#/$defs/LocalTelemetryProbe"
         }
       ]
     },
@@ -985,9 +1209,33 @@
       "title": "SuiteMetadata",
       "type": "object"
     },
+    "SyntheticLocalIdentity": {
+      "additionalProperties": false,
+      "description": "A non-secret principal for the loopback-only synthetic application.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "principal": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "type": {
+          "const": "syntheticLocal",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "principal"
+      ],
+      "title": "SyntheticLocalIdentity",
+      "type": "object"
+    },
     "Target": {
       "additionalProperties": false,
-      "description": "A bounded application endpoint and its AWS deployment context.",
+      "description": "A bounded application endpoint and optional AWS deployment context.",
       "properties": {
         "allowedHosts": {
           "items": {
@@ -1009,7 +1257,15 @@
           "default": null
         },
         "awsRegion": {
-          "$ref": "#/$defs/AwsRegion"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AwsRegion"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "endpoint": {
           "format": "uri",
@@ -1028,10 +1284,51 @@
         "id",
         "environment",
         "endpoint",
-        "allowedHosts",
-        "awsRegion"
+        "allowedHosts"
       ],
       "title": "Target",
+      "type": "object"
+    },
+    "TelemetryCanaryAbsentAssertion": {
+      "additionalProperties": false,
+      "description": "Require a synthetic canary to be absent from application telemetry.",
+      "properties": {
+        "controlRefs": {
+          "items": {
+            "$ref": "#/$defs/ControlReference"
+          },
+          "minItems": 1,
+          "title": "Controlrefs",
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/Limitation"
+          },
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "probeRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "type": {
+          "const": "telemetry.canary-absent",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "controlRefs",
+        "limitations",
+        "type",
+        "probeRef"
+      ],
+      "title": "TelemetryCanaryAbsentAssertion",
       "type": "object"
     },
     "TelemetryCanaryAssertion": {

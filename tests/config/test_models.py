@@ -12,10 +12,16 @@ import yaml
 from pydantic import ValidationError
 
 from cai_verify.config import (
+    ApplicationStatusAssertion,
+    AuditEventPresentAssertion,
+    AuditPrincipalCorrelatedAssertion,
     AwsSigV4Action,
     CloudTrailProbe,
     CloudWatchLogsProbe,
     HttpAction,
+    LocalTelemetryProbe,
+    SyntheticLocalIdentity,
+    TelemetryCanaryAbsentAssertion,
     VerificationSuite,
     verification_suite_json_schema,
 )
@@ -25,6 +31,7 @@ _VALID_SUITE = _FIXTURES / "valid" / "full.yaml"
 _SCHEMA_PATH = (
     Path(__file__).parents[2] / "schemas" / "verification-suite-1alpha1.schema.json"
 )
+_LOCAL_SUITE = Path(__file__).parents[2] / "examples/local/synthetic-suite.json"
 _EXPECTED_UNKNOWN_FIELD_ERRORS = 2
 _ENVIRONMENT = {
     "CAI_VERIFY_AWS_PROFILE": "readonly-profile",
@@ -69,6 +76,42 @@ def test_full_yaml_fixture_validates_all_supported_component_kinds() -> None:
         "auditCorrelation",
         "encryption",
     }
+
+
+def test_local_json_fixture_validates_only_explicit_synthetic_components() -> None:
+    """The local slice adds no cloud identity, probe, or action execution path."""
+    loaded = json.loads(_LOCAL_SUITE.read_bytes())
+    suite = VerificationSuite.model_validate(loaded)
+    scenario = suite.scenarios[0]
+
+    assert type(suite.identities[0]) is SyntheticLocalIdentity
+    assert type(scenario.actions[0]) is HttpAction
+    assert type(scenario.probes[0]) is LocalTelemetryProbe
+    assert {type(assertion) for assertion in scenario.assertions} == {
+        ApplicationStatusAssertion,
+        TelemetryCanaryAbsentAssertion,
+        AuditEventPresentAssertion,
+        AuditPrincipalCorrelatedAssertion,
+    }
+    assert suite.target.aws_region is None
+    assert suite.target.aws_account_id is None
+
+
+def test_local_components_cannot_be_mixed_with_cloud_targets() -> None:
+    """Local identities and telemetry never silently expand a cloud suite."""
+    loaded = json.loads(_LOCAL_SUITE.read_bytes())
+    loaded["target"].update(
+        {
+            "awsRegion": "eu-west-2",
+            "endpoint": "https://example.test",
+            "environment": "sandbox",
+        },
+    )
+    loaded["target"]["allowedHosts"] = ["example.test"]
+
+    message = _validation_message(cast("SuiteMapping", loaded))
+
+    assert "syntheticLocal identities require a local target" in message
 
 
 @pytest.mark.parametrize(

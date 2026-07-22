@@ -264,13 +264,13 @@ class SuiteMetadata(_StrictModel):
 
 
 class Target(_StrictModel):
-    """A bounded application endpoint and its AWS deployment context."""
+    """A bounded application endpoint and optional AWS deployment context."""
 
     id: Identifier
     environment: DeploymentEnvironment
     endpoint: AnyHttpUrl
     allowed_hosts: tuple[Hostname, ...] = Field(min_length=1)
-    aws_region: AwsRegion
+    aws_region: AwsRegion | None = None
     aws_account_id: AwsAccountId | None = None
 
     @field_validator("endpoint")
@@ -290,6 +290,16 @@ class Target(_StrictModel):
         """Require the endpoint host to be declared in the target allowlist."""
         if self.endpoint.host not in self.allowed_hosts:
             message = "target endpoint host must appear in allowedHosts"
+            raise ValueError(message)
+        if self.environment is DeploymentEnvironment.LOCAL:
+            if self.endpoint.host != "localhost":
+                message = "local targets must use the localhost hostname"
+                raise ValueError(message)
+            if self.aws_region is not None or self.aws_account_id is not None:
+                message = "local targets must not declare AWS deployment fields"
+                raise ValueError(message)
+        elif self.aws_region is None:
+            message = "non-local targets must declare awsRegion"
             raise ValueError(message)
         return self
 
@@ -318,8 +328,16 @@ class AssumedRoleIdentity(_StrictModel):
     external_id: EnvironmentReference | None = None
 
 
+class SyntheticLocalIdentity(_StrictModel):
+    """A non-secret principal for the loopback-only synthetic application."""
+
+    id: Identifier
+    type: Literal["syntheticLocal"]
+    principal: Identifier
+
+
 type Identity = Annotated[
-    CurrentAwsIdentity | AssumedRoleIdentity,
+    CurrentAwsIdentity | AssumedRoleIdentity | SyntheticLocalIdentity,
     Field(discriminator="type"),
 ]
 
@@ -446,8 +464,30 @@ class CloudTrailProbe(_BaseProbe):
         return event_names
 
 
+class LocalTelemetryProbe(_BaseProbe):
+    """Read normalized records from the in-process synthetic telemetry sink."""
+
+    type: Literal["localTelemetry"]
+
+    @field_validator("observations")
+    @classmethod
+    def observations_are_local(
+        cls,
+        observations: tuple[ObservationKind, ...],
+    ) -> tuple[ObservationKind, ...]:
+        """Keep the local probe's normalization surface deliberately narrow."""
+        supported = {
+            ObservationKind.TELEMETRY_CANARY,
+            ObservationKind.AUDIT_EVENT,
+        }
+        if not set(observations) <= supported:
+            message = "localTelemetry supports telemetryCanary and auditEvent only"
+            raise ValueError(message)
+        return observations
+
+
 type Probe = Annotated[
-    CloudWatchLogsProbe | CloudTrailProbe,
+    CloudWatchLogsProbe | CloudTrailProbe | LocalTelemetryProbe,
     Field(discriminator="type"),
 ]
 
@@ -582,12 +622,48 @@ class EncryptionAssertion(_BaseAssertion):
         return scopes
 
 
+class ApplicationStatusAssertion(_BaseAssertion):
+    """Require one HTTP action to return an exact status code."""
+
+    type: Literal["application.status"]
+    action_ref: Identifier
+    expected_status: Annotated[StrictInt, Field(ge=100, le=599)]
+
+
+class TelemetryCanaryAbsentAssertion(_BaseAssertion):
+    """Require a synthetic canary to be absent from application telemetry."""
+
+    type: Literal["telemetry.canary-absent"]
+    probe_ref: Identifier
+
+
+class AuditEventPresentAssertion(_BaseAssertion):
+    """Require a named audit event correlated to a completed action."""
+
+    type: Literal["audit.event-present"]
+    action_ref: Identifier
+    probe_ref: Identifier
+    event_name: Identifier
+
+
+class AuditPrincipalCorrelatedAssertion(_BaseAssertion):
+    """Require an audit event principal to match the action principal."""
+
+    type: Literal["audit.principal-correlated"]
+    action_ref: Identifier
+    probe_ref: Identifier
+
+
 type Assertion = Annotated[
     UnauthorizedIdentityAssertion
     | ProviderBoundaryAssertion
     | TelemetryCanaryAssertion
     | AuditCorrelationAssertion
-    | EncryptionAssertion,
+    | EncryptionAssertion
+    | ApplicationStatusAssertion
+    | TelemetryCanaryAbsentAssertion
+    | AuditEventPresentAssertion
+    | AuditPrincipalCorrelatedAssertion,
     Field(discriminator="type"),
 ]
 
@@ -679,9 +755,73 @@ class VerificationSuite(_StrictModel):
         )
 
         identity_ids = {identity.id for identity in self.identities}
+        local_identity_ids = {
+            identity.id
+            for identity in self.identities
+            if isinstance(identity, SyntheticLocalIdentity)
+        }
+        if self.target.environment is DeploymentEnvironment.LOCAL:
+            if local_identity_ids != identity_ids:
+                message = "local targets require only syntheticLocal identities"
+                raise ValueError(message)
+        elif local_identity_ids:
+            message = "syntheticLocal identities require a local target"
+            raise ValueError(message)
         for scenario in self.scenarios:
             self._validate_scenario_references(scenario, identity_ids)
+            self._validate_local_components(scenario)
         return self
+
+    def _validate_local_components(self, scenario: Scenario) -> None:
+        local_probes = [
+            probe for probe in scenario.probes if isinstance(probe, LocalTelemetryProbe)
+        ]
+        local_assertions = [
+            assertion
+            for assertion in scenario.assertions
+            if isinstance(
+                assertion,
+                ApplicationStatusAssertion
+                | TelemetryCanaryAbsentAssertion
+                | AuditEventPresentAssertion
+                | AuditPrincipalCorrelatedAssertion,
+            )
+        ]
+        if (local_probes or local_assertions) and (
+            self.target.environment is not DeploymentEnvironment.LOCAL
+        ):
+            message = "local probes and assertions require a local target"
+            raise ValueError(message)
+        if self.target.environment is DeploymentEnvironment.LOCAL:
+            if any(not isinstance(action, HttpAction) for action in scenario.actions):
+                message = "local scenarios support only http actions"
+                raise ValueError(message)
+            if any(
+                not isinstance(probe, LocalTelemetryProbe) for probe in scenario.probes
+            ):
+                message = "local scenarios support only localTelemetry probes"
+                raise ValueError(message)
+            if len(local_assertions) != len(scenario.assertions):
+                message = "local scenarios support only local assertion types"
+                raise ValueError(message)
+            probes_by_id = {probe.id: probe for probe in scenario.probes}
+            for assertion in scenario.assertions:
+                if isinstance(assertion, TelemetryCanaryAbsentAssertion):
+                    required = ObservationKind.TELEMETRY_CANARY
+                elif isinstance(
+                    assertion,
+                    AuditEventPresentAssertion | AuditPrincipalCorrelatedAssertion,
+                ):
+                    required = ObservationKind.AUDIT_EVENT
+                else:
+                    continue
+                probe = probes_by_id[assertion.probe_ref]
+                if required not in probe.observations:
+                    message = (
+                        f"local assertion {assertion.id!r} requires "
+                        f"{required.value} from probe {probe.id!r}"
+                    )
+                    raise ValueError(message)
 
     def render_resolved_redacted(self, environment: Mapping[str, str]) -> str:
         """Validate environment resolution and render only redacted JSON.
