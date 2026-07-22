@@ -1,0 +1,78 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cai-verify"
+version = "0.1.0"
+description = "Cloud AI Control Verifier"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = [
+  "typer>=0.21,<1",
+]
+
+[project.scripts]
+cai-verify = "cai_verify.cli:app"
+
+[dependency-groups]
+dev = [
+  "hatchling>=1.27,<2",
+  "mdformat>=0.7.22,<1",
+  "mdformat-gfm>=0.4.1,<1",
+  "mypy>=1.19,<2",
+  "pip-audit>=2.9,<3",
+  "pytest>=9,<10",
+  "pytest-socket>=0.7,<1",
+  "ruff>=0.14,<1",
+  "twine>=6.2,<7",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/LICENSE",
+  "/README.md",
+  "/pyproject.toml",
+  "/src/cai_verify",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cai_verify"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+pretty = true
+show_error_codes = true
+files = ["scripts", "src", "tests"]
+
+[tool.pytest.ini_options]
+addopts = [
+  "--disable-socket",
+  "--strict-config",
+  "--strict-markers",
+  "-ra",
+]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+src = ["src", "tests"]
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "COM812",
+  "D203",
+  "D213",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.uv]
+package = true
+required-version = ">=0.11.19,<0.12"
