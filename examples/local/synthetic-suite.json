@@ -1,0 +1,261 @@
+{
+  "evidencePolicy": {
+    "clockSkewTolerance": "PT30S",
+    "maxAge": "PT5M"
+  },
+  "identities": [
+    {
+      "id": "synthetic-user",
+      "principal": "synthetic-healthcare-user",
+      "type": "syntheticLocal"
+    }
+  ],
+  "limitations": [
+    {
+      "description": "This local demonstration does not assess a production system.",
+      "id": "local-demo-only"
+    }
+  ],
+  "metadata": {
+    "description": "Verify local application, telemetry, and audit behavior with synthetic data.",
+    "name": "synthetic-local-telemetry",
+    "owners": [
+      "local-demo@example.test"
+    ]
+  },
+  "scenarios": [
+    {
+      "actions": [
+        {
+          "id": "synthetic-inference",
+          "inputs": [
+            {
+              "location": "json",
+              "name": "prompt",
+              "value": {
+                "sensitive": false,
+                "source": "literal",
+                "value": "Summarize synthetic record CAI-SYNTHETIC-CANARY-001."
+              }
+            }
+          ],
+          "method": "POST",
+          "mutating": false,
+          "path": "/v1/inference",
+          "timeoutSeconds": 5,
+          "type": "http"
+        }
+      ],
+      "assertions": [
+        {
+          "actionRef": "synthetic-inference",
+          "controlRefs": [
+            {
+              "limitations": [
+                {
+                  "description": "This synthetic mapping is not a compliance claim.",
+                  "id": "synthetic-mapping"
+                }
+              ],
+              "rationale": "Exercises deterministic local application evidence.",
+              "reference": "LOCAL-APP-STATUS",
+              "relationship": "supports-assessment",
+              "responsibilities": [
+                {
+                  "description": "Runs the deterministic evaluator.",
+                  "party": "verifier"
+                },
+                {
+                  "description": "No cloud provider participates in this local demo.",
+                  "party": "cloudProvider"
+                },
+                {
+                  "description": "Chooses whether the local demo is representative.",
+                  "party": "customer"
+                }
+              ],
+              "review": {
+                "reviewedAt": "2026-07-22",
+                "reviewedBy": "local-demo-reviewer@example.test"
+              },
+              "scope": "The loopback synthetic application only.",
+              "source": "Synthetic local demonstration",
+              "sourceVersion": "1"
+            }
+          ],
+          "expectedStatus": 200,
+          "id": "application-status",
+          "limitations": [
+            {
+              "description": "The response is generated without an external model.",
+              "id": "synthetic-response"
+            }
+          ],
+          "type": "application.status"
+        },
+        {
+          "controlRefs": [
+            {
+              "limitations": [
+                {
+                  "description": "This synthetic mapping is not a compliance claim.",
+                  "id": "synthetic-mapping"
+                }
+              ],
+              "rationale": "Exercises deterministic local telemetry evidence.",
+              "reference": "LOCAL-TELEMETRY-CANARY",
+              "relationship": "supports-assessment",
+              "responsibilities": [
+                {
+                  "description": "Runs the deterministic evaluator.",
+                  "party": "verifier"
+                },
+                {
+                  "description": "No cloud provider participates in this local demo.",
+                  "party": "cloudProvider"
+                },
+                {
+                  "description": "Chooses whether the local demo is representative.",
+                  "party": "customer"
+                }
+              ],
+              "review": {
+                "reviewedAt": "2026-07-22",
+                "reviewedBy": "local-demo-reviewer@example.test"
+              },
+              "scope": "The process-local synthetic telemetry sink only.",
+              "source": "Synthetic local demonstration",
+              "sourceVersion": "1"
+            }
+          ],
+          "id": "telemetry-canary-absent",
+          "limitations": [
+            {
+              "description": "Checks one explicitly synthetic canary.",
+              "id": "single-canary"
+            }
+          ],
+          "probeRef": "local-telemetry",
+          "type": "telemetry.canary-absent"
+        },
+        {
+          "actionRef": "synthetic-inference",
+          "controlRefs": [
+            {
+              "limitations": [
+                {
+                  "description": "This synthetic mapping is not a compliance claim.",
+                  "id": "synthetic-mapping"
+                }
+              ],
+              "rationale": "Exercises deterministic local audit evidence.",
+              "reference": "LOCAL-AUDIT-EVENT",
+              "relationship": "supports-assessment",
+              "responsibilities": [
+                {
+                  "description": "Runs the deterministic evaluator.",
+                  "party": "verifier"
+                },
+                {
+                  "description": "No cloud provider participates in this local demo.",
+                  "party": "cloudProvider"
+                },
+                {
+                  "description": "Chooses whether the local demo is representative.",
+                  "party": "customer"
+                }
+              ],
+              "review": {
+                "reviewedAt": "2026-07-22",
+                "reviewedBy": "local-demo-reviewer@example.test"
+              },
+              "scope": "The process-local synthetic audit sink only.",
+              "source": "Synthetic local demonstration",
+              "sourceVersion": "1"
+            }
+          ],
+          "eventName": "SyntheticInference",
+          "id": "audit-event-present",
+          "limitations": [
+            {
+              "description": "The audit event is emitted by the synthetic application.",
+              "id": "synthetic-audit"
+            }
+          ],
+          "probeRef": "local-telemetry",
+          "type": "audit.event-present"
+        },
+        {
+          "actionRef": "synthetic-inference",
+          "controlRefs": [
+            {
+              "limitations": [
+                {
+                  "description": "This synthetic mapping is not a compliance claim.",
+                  "id": "synthetic-mapping"
+                }
+              ],
+              "rationale": "Exercises deterministic pseudonymous principal correlation.",
+              "reference": "LOCAL-AUDIT-PRINCIPAL",
+              "relationship": "supports-assessment",
+              "responsibilities": [
+                {
+                  "description": "Runs the deterministic evaluator.",
+                  "party": "verifier"
+                },
+                {
+                  "description": "No cloud provider participates in this local demo.",
+                  "party": "cloudProvider"
+                },
+                {
+                  "description": "Chooses whether the local demo is representative.",
+                  "party": "customer"
+                }
+              ],
+              "review": {
+                "reviewedAt": "2026-07-22",
+                "reviewedBy": "local-demo-reviewer@example.test"
+              },
+              "scope": "One synthetic principal and correlated audit event.",
+              "source": "Synthetic local demonstration",
+              "sourceVersion": "1"
+            }
+          ],
+          "id": "audit-principal-correlated",
+          "limitations": [
+            {
+              "description": "Principal values are synthetic and pseudonymized in evidence.",
+              "id": "pseudonymous-principal"
+            }
+          ],
+          "probeRef": "local-telemetry",
+          "type": "audit.principal-correlated"
+        }
+      ],
+      "description": "Call the synthetic application and correlate local telemetry and audit evidence.",
+      "id": "local-synthetic-request",
+      "identityRef": "synthetic-user",
+      "probes": [
+        {
+          "actionRef": "synthetic-inference",
+          "id": "local-telemetry",
+          "maxAge": "PT5M",
+          "observations": [
+            "telemetryCanary",
+            "auditEvent"
+          ],
+          "type": "localTelemetry"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": "1alpha1",
+  "target": {
+    "allowedHosts": [
+      "localhost"
+    ],
+    "endpoint": "http://localhost:8080",
+    "environment": "local",
+    "id": "synthetic-local-app"
+  }
+}

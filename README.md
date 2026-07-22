@@ -4,12 +4,12 @@ Cloud AI Control Verifier (`cai-verify`) is an AWS-first, open-source tool for
 executing focused security-control tests against deployed AI applications and
 producing machine-readable evidence.
 
-This repository currently contains the Python project scaffold, version
-command, core assertion-result semantics, and the strict `1alpha1`
-verification-suite configuration models. It also provides unsigned,
-tamper-evident evidence run directories with offline integrity verification.
-It does not execute control tests or establish HIPAA, FedRAMP, NIST, or legal
-compliance.
+This repository contains core assertion-result semantics, the strict `1alpha1`
+verification-suite configuration models, and one executable local vertical
+slice. The local slice calls a loopback synthetic AI application, probes its
+process-local telemetry, evaluates four deterministic assertions, renders
+terminal and JSON reports, and finalizes an unsigned tamper-evident evidence
+run. It does not establish HIPAA, FedRAMP, NIST, or legal compliance.
 
 The generated suite contract is committed at
 [`schemas/verification-suite-1alpha1.schema.json`](schemas/verification-suite-1alpha1.schema.json).
@@ -17,11 +17,12 @@ The generated suite contract is committed at
 ## Verification suite schema
 
 `cai_verify.config.VerificationSuite` validates already-parsed suite mappings.
-Version `1alpha1` has fixed AWS identity, HTTP/AWS SigV4 action, CloudWatch
-Logs/CloudTrail probe, and deterministic assertion vocabularies. Unknown fields
-fail at every model boundary. Duplicate reference IDs, unresolved component
-references, invalid freshness, mutation declarations, and missing limitations
-also fail before planning.
+Version `1alpha1` has fixed local/AWS identity, HTTP/AWS SigV4 action,
+local/CloudWatch Logs/CloudTrail probe, and deterministic assertion
+vocabularies. Local-only variants cannot be mixed into a cloud target. Unknown
+fields fail at every model boundary. Duplicate reference IDs, unresolved
+component references, invalid freshness, mutation declarations, and missing
+limitations also fail before planning.
 
 Secret-capable values accept only explicit environment references:
 
@@ -47,7 +48,8 @@ Compatibility notes for `1alpha1`:
   24 hours; clock skew is limited to five minutes.
 - Additive fields are rejected in this version. New fields or union variants
   require an explicit schema compatibility decision.
-- YAML parsing and all execution remain out of scope. PyYAML is test-only.
+- The built-in loader accepts bounded duplicate-free JSON. General YAML parsing
+  remains out of scope; PyYAML is test-only.
 
 Pydantic v2 is the direct runtime dependency required for the requested strict
 models and Draft 2020-12 schema generation. It and its `pydantic-core`
@@ -80,6 +82,39 @@ unsigned bundle is internally consistent; it does not authenticate who created
 the bundle. Writing and verification share bounded schema and I/O limits: 8 MiB
 manifests, 10,000 artifacts, 64 MiB per artifact, and 512 MiB of artifact bytes
 per run. Signing is intentionally not implemented yet.
+
+## Local synthetic demonstration
+
+The committed suite uses only synthetic data and the standard-library loopback
+HTTP server. Secure mode records an event label rather than request content;
+vulnerable mode intentionally records the synthetic prompt so
+`telemetry.canary-absent` fails. Both modes emit a pseudonymous correlated audit
+event. No external model, cloud API, or internet access is used.
+
+```console
+uv run cai-verify run-local examples/local/synthetic-suite.json \
+  --mode secure --run-id local-secure --evidence-root .cai-verify/runs
+```
+
+The secure command exits `0`. The same suite in vulnerable mode exits `1` and
+reports only the canary-absence assertion as failed:
+
+```console
+uv run cai-verify run-local examples/local/synthetic-suite.json \
+  --mode vulnerable --run-id local-vulnerable --evidence-root .cai-verify/runs
+```
+
+Use `--report json` for canonical JSON on standard output. Every run stores both
+report formats, normalized action and probe evidence, individual assertion
+results, and a finalized manifest. Verify the bundle offline with:
+
+```console
+uv run cai-verify verify-evidence .cai-verify/runs/local-secure --report json
+```
+
+Integrity verification exits `0` for an internally consistent unsigned bundle
+and `2` for a missing, malformed, or modified artifact. It detects tampering but
+does not authenticate who produced the evidence.
 
 ## Requirements
 
@@ -114,8 +149,9 @@ Run the complete local quality gate:
 make check
 ```
 
-The test configuration disables socket access, so unit tests cannot reach the
-network or AWS.
+The test configuration disables socket access by default. Three integration
+tests permit only `127.0.0.1` for the synthetic application; no test can reach
+the internet or AWS.
 
 ## Development commands
 

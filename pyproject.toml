@@ -37,6 +37,7 @@ dev = [
 include = [
   "/LICENSE",
   "/README.md",
+  "/examples",
   "/pyproject.toml",
   "/src/cai_verify",
 ]
