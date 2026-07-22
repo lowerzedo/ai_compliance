@@ -1,0 +1,160 @@
+schemaVersion: 1alpha1
+metadata:
+  name: synthetic-healthcare-boundaries
+  description: Verify narrow controls against the synthetic document assistant.
+  owners:
+    - security@example.test
+target:
+  id: synthetic-assistant
+  environment: sandbox
+  endpoint: https://assistant.sandbox.example.test/v1
+  allowedHosts:
+    - assistant.sandbox.example.test
+  awsRegion: eu-west-2
+  awsAccountId: "111122223333"
+identities:
+  - id: evidence-reader
+    type: awsCurrent
+    profile:
+      source: environment
+      name: CAI_VERIFY_AWS_PROFILE
+  - id: unauthorized-caller
+    type: awsAssumeRole
+    roleArn: arn:aws:iam::111122223333:role/cai-verify-unauthorized
+    sessionName: cai-verify-synthetic
+    externalId:
+      source: environment
+      name: CAI_VERIFY_EXTERNAL_ID
+evidencePolicy:
+  maxAge: PT5M
+  clockSkewTolerance: PT30S
+scenarios:
+  - id: synthetic-request-boundaries
+    description: Correlate a denied request with telemetry and audit evidence.
+    identityRef: unauthorized-caller
+    actions:
+      - id: unsigned-request
+        type: http
+        method: POST
+        path: /documents/synthetic/summarize
+        inputs:
+          - location: header
+            name: Authorization
+            value:
+              source: environment
+              name: SYNTHETIC_APP_TOKEN
+          - location: json
+            name: documentId
+            value:
+              source: literal
+              value: synthetic-document-001
+              sensitive: false
+        timeoutSeconds: 15
+        mutating: false
+      - id: signed-request
+        type: awsSigV4
+        identityRef: unauthorized-caller
+        method: POST
+        path: /documents/synthetic/summarize
+        inputs:
+          - location: json
+            name: documentId
+            value:
+              source: literal
+              value: synthetic-document-001
+              sensitive: false
+        timeoutSeconds: 15
+        mutating: false
+        service: execute-api
+        region: eu-west-2
+    probes:
+      - id: application-telemetry
+        type: cloudWatchLogs
+        identityRef: evidence-reader
+        actionRef: unsigned-request
+        observations:
+          - providerInvocation
+          - telemetryCanary
+        maxAge: PT3M
+        logGroup: /aws/cai-verify/synthetic-assistant
+      - id: cloud-audit
+        type: cloudTrail
+        identityRef: evidence-reader
+        actionRef: signed-request
+        observations:
+          - auditEvent
+          - encryptionState
+        eventSource: execute-api.amazonaws.com
+        eventNames:
+          - Invoke
+    assertions:
+      - id: unauthorized-request-denied
+        type: unauthorizedIdentityDenied
+        actionRef: unsigned-request
+        controlRefs:
+          - &control_ref
+            source: NIST SP 800-53
+            sourceVersion: 5.2.0
+            reference: AC-3
+            relationship: supports-assessment
+            rationale: The scenario tests one synthetic authorization decision.
+            scope: The declared application endpoint and test identity only.
+            limitations:
+              - &mapping_limitation
+                id: mapping-boundary
+                description: This mapping does not establish control implementation.
+            responsibilities:
+              - party: verifier
+                description: Validate and report only the declared technical assertion.
+              - party: cloudProvider
+                description: Operate the underlying managed service control plane.
+              - party: customer
+                description: Configure identities, endpoint policy, and assessment scope.
+            review:
+              reviewedBy: security-reviewer@example.test
+              reviewedAt: 2026-07-22
+        limitations:
+          - &assertion_limitation
+            id: synthetic-only
+            description: The action uses synthetic data and one declared identity.
+      - id: provider-is-allowed
+        type: providerBoundary
+        probeRef: application-telemetry
+        allowedProviders:
+          - amazon-bedrock
+        controlRefs:
+          - *control_ref
+        limitations:
+          - *assertion_limitation
+      - id: canary-is-correlated
+        type: telemetryCanary
+        actionRef: unsigned-request
+        probeRef: application-telemetry
+        canary:
+          source: environment
+          name: SYNTHETIC_TELEMETRY_CANARY
+        controlRefs:
+          - *control_ref
+        limitations:
+          - *assertion_limitation
+      - id: audit-is-correlated
+        type: auditCorrelation
+        actionRef: signed-request
+        probeRef: cloud-audit
+        controlRefs:
+          - *control_ref
+        limitations:
+          - *assertion_limitation
+      - id: transport-and-storage-encrypted
+        type: encryption
+        probeRef: cloud-audit
+        scopes:
+          - atRest
+          - inTransit
+        controlRefs:
+          - *control_ref
+        limitations:
+          - *assertion_limitation
+limitations:
+  - id: technical-assessment-only
+    description: A passing suite does not establish legal or framework compliance.

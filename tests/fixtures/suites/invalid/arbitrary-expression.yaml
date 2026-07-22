@@ -1,0 +1,40 @@
+schemaVersion: 1alpha1
+metadata:
+  name: expressions-are-not-supported
+  description: This fixture proves arbitrary evaluators are rejected.
+  owners: [security@example.test]
+target:
+  id: local-app
+  environment: local
+  endpoint: http://localhost:8080
+  allowedHosts: [localhost]
+  awsRegion: eu-west-2
+identities:
+  - id: local-reader
+    type: awsCurrent
+evidencePolicy:
+  maxAge: PT1M
+scenarios:
+  - id: rejected-expression
+    description: Assertions must select a fixed deterministic evaluator.
+    identityRef: local-reader
+    actions:
+      - id: local-request
+        type: http
+        method: GET
+        path: /health
+    probes:
+      - id: local-logs
+        type: cloudWatchLogs
+        actionRef: local-request
+        observations: [auditEvent]
+        logGroup: /aws/cai-verify/synthetic
+    assertions:
+      - id: arbitrary-evaluator
+        type: expression
+        expression: observed.status == 200
+        limitations: []
+        controlRefs: []
+limitations:
+  - id: invalid-example
+    description: This file is expected to fail validation.

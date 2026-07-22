@@ -1,0 +1,29 @@
+schemaVersion: 1alpha1
+metadata:
+  name: shell-is-not-a-suite-action
+  description: This fixture proves generic shell actions are rejected.
+  owners: [security@example.test]
+target:
+  id: local-app
+  environment: local
+  endpoint: http://localhost:8080
+  allowedHosts: [localhost]
+  awsRegion: eu-west-2
+identities:
+  - id: local-reader
+    type: awsCurrent
+evidencePolicy:
+  maxAge: PT1M
+scenarios:
+  - id: rejected-shell
+    description: A shell command is never accepted from suite YAML.
+    identityRef: local-reader
+    actions:
+      - id: arbitrary-command
+        type: shell
+        command: curl http://localhost:8080
+    probes: []
+    assertions: []
+limitations:
+  - id: invalid-example
+    description: This file is expected to fail validation.

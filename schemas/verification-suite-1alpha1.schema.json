@@ -1,0 +1,1185 @@
+{
+  "$defs": {
+    "Action": {
+      "discriminator": {
+        "mapping": {
+          "awsSigV4": "#/$defs/AwsSigV4Action",
+          "http": "#/$defs/HttpAction"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/HttpAction"
+        },
+        {
+          "$ref": "#/$defs/AwsSigV4Action"
+        }
+      ]
+    },
+    "ActionInput": {
+      "additionalProperties": false,
+      "description": "One explicitly sourced input for an HTTP-family action.",
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/InputLocation"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputName"
+            },
+            {
+              "$ref": "#/$defs/HeaderName"
+            }
+          ],
+          "title": "Name"
+        },
+        "value": {
+          "$ref": "#/$defs/InputValue"
+        }
+      },
+      "required": [
+        "location",
+        "name",
+        "value"
+      ],
+      "title": "ActionInput",
+      "type": "object"
+    },
+    "Assertion": {
+      "discriminator": {
+        "mapping": {
+          "auditCorrelation": "#/$defs/AuditCorrelationAssertion",
+          "encryption": "#/$defs/EncryptionAssertion",
+          "providerBoundary": "#/$defs/ProviderBoundaryAssertion",
+          "telemetryCanary": "#/$defs/TelemetryCanaryAssertion",
+          "unauthorizedIdentityDenied": "#/$defs/UnauthorizedIdentityAssertion"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/UnauthorizedIdentityAssertion"
+        },
+        {
+          "$ref": "#/$defs/ProviderBoundaryAssertion"
+        },
+        {
+          "$ref": "#/$defs/TelemetryCanaryAssertion"
+        },
+        {
+          "$ref": "#/$defs/AuditCorrelationAssertion"
+        },
+        {
+          "$ref": "#/$defs/EncryptionAssertion"
+        }
+      ]
+    },
+    "AssumedRoleIdentity": {
+      "additionalProperties": false,
+      "description": "Assume one declared AWS role without accepting literal credentials.",
+      "properties": {
+        "externalId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "roleArn": {
+          "$ref": "#/$defs/AwsRoleArn"
+        },
+        "sessionName": {
+          "pattern": "^[\\w+=,.@-]{2,64}$",
+          "title": "Sessionname",
+          "type": "string"
+        },
+        "type": {
+          "const": "awsAssumeRole",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "roleArn",
+        "sessionName"
+      ],
+      "title": "AssumedRoleIdentity",
+      "type": "object"
+    },
+    "AuditCorrelationAssertion": {
+      "additionalProperties": false,
+      "description": "Require an action to correlate with a normalized audit observation.",
+      "properties": {
+        "actionRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "controlRefs": {
+          "items": {
+            "$ref": "#/$defs/ControlReference"
+          },
+          "minItems": 1,
+          "title": "Controlrefs",
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/Limitation"
+          },
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "probeRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "type": {
+          "const": "auditCorrelation",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "controlRefs",
+        "limitations",
+        "type",
+        "actionRef",
+        "probeRef"
+      ],
+      "title": "AuditCorrelationAssertion",
+      "type": "object"
+    },
+    "AwsAccountId": {
+      "pattern": "^\\d{12}$",
+      "type": "string"
+    },
+    "AwsRegion": {
+      "pattern": "^[a-z]{2}(?:-gov)?-[a-z]+-\\d$",
+      "type": "string"
+    },
+    "AwsRoleArn": {
+      "pattern": "^arn:(?:aws|aws-us-gov|aws-cn):iam::\\d{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$",
+      "type": "string"
+    },
+    "AwsSigV4Action": {
+      "additionalProperties": false,
+      "description": "An HTTP application request signed for one allowed AWS service.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "identityRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Identifier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "inputs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActionInput"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "method": {
+          "$ref": "#/$defs/HttpMethod"
+        },
+        "mutating": {
+          "default": false,
+          "title": "Mutating",
+          "type": "boolean"
+        },
+        "path": {
+          "$ref": "#/$defs/RelativeHttpPath"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AwsRegion"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "service": {
+          "enum": [
+            "execute-api",
+            "bedrock-runtime"
+          ],
+          "title": "Service",
+          "type": "string"
+        },
+        "timeoutSeconds": {
+          "$ref": "#/$defs/PositiveTimeout",
+          "default": 30
+        },
+        "type": {
+          "const": "awsSigV4",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "path",
+        "type",
+        "service"
+      ],
+      "title": "AwsSigV4Action",
+      "type": "object"
+    },
+    "CloudTrailProbe": {
+      "additionalProperties": false,
+      "description": "Collect normalized events from CloudTrail's fixed lookup surface.",
+      "properties": {
+        "actionRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "eventNames": {
+          "items": {
+            "$ref": "#/$defs/Identifier"
+          },
+          "minItems": 1,
+          "title": "Eventnames",
+          "type": "array"
+        },
+        "eventSource": {
+          "enum": [
+            "bedrock.amazonaws.com",
+            "execute-api.amazonaws.com",
+            "kms.amazonaws.com",
+            "s3.amazonaws.com",
+            "sts.amazonaws.com"
+          ],
+          "title": "Eventsource",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "identityRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Identifier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "maxAge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FreshnessString"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/ObservationKind"
+          },
+          "minItems": 1,
+          "title": "Observations",
+          "type": "array"
+        },
+        "type": {
+          "const": "cloudTrail",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "actionRef",
+        "observations",
+        "type",
+        "eventSource",
+        "eventNames"
+      ],
+      "title": "CloudTrailProbe",
+      "type": "object"
+    },
+    "CloudWatchLogsProbe": {
+      "additionalProperties": false,
+      "description": "Collect normalized observations from one CloudWatch log group.",
+      "properties": {
+        "actionRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "identityRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Identifier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "logGroup": {
+          "pattern": "^[A-Za-z0-9_./#-]{1,512}$",
+          "title": "Loggroup",
+          "type": "string"
+        },
+        "maxAge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FreshnessString"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/ObservationKind"
+          },
+          "minItems": 1,
+          "title": "Observations",
+          "type": "array"
+        },
+        "type": {
+          "const": "cloudWatchLogs",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "actionRef",
+        "observations",
+        "type",
+        "logGroup"
+      ],
+      "title": "CloudWatchLogsProbe",
+      "type": "object"
+    },
+    "ControlReference": {
+      "additionalProperties": false,
+      "description": "A versioned, bounded relationship to an external control source.",
+      "properties": {
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/Limitation"
+          },
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "rationale": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "reference": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "relationship": {
+          "const": "supports-assessment",
+          "title": "Relationship",
+          "type": "string"
+        },
+        "responsibilities": {
+          "items": {
+            "$ref": "#/$defs/Responsibility"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Responsibilities",
+          "type": "array"
+        },
+        "review": {
+          "$ref": "#/$defs/ReviewMetadata"
+        },
+        "scope": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "source": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "sourceVersion": {
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      },
+      "required": [
+        "source",
+        "sourceVersion",
+        "reference",
+        "relationship",
+        "rationale",
+        "scope",
+        "limitations",
+        "responsibilities",
+        "review"
+      ],
+      "title": "ControlReference",
+      "type": "object"
+    },
+    "CurrentAwsIdentity": {
+      "additionalProperties": false,
+      "description": "Use the process's already-scoped AWS credential provider chain.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "awsCurrent",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "title": "CurrentAwsIdentity",
+      "type": "object"
+    },
+    "DeploymentEnvironment": {
+      "description": "Explicit deployment classes accepted by the alpha schema.",
+      "enum": [
+        "local",
+        "sandbox",
+        "development",
+        "staging"
+      ],
+      "title": "DeploymentEnvironment",
+      "type": "string"
+    },
+    "EncryptionAssertion": {
+      "additionalProperties": false,
+      "description": "Require evidence for one or more fixed encryption scopes.",
+      "properties": {
+        "controlRefs": {
+          "items": {
+            "$ref": "#/$defs/ControlReference"
+          },
+          "minItems": 1,
+          "title": "Controlrefs",
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/Limitation"
+          },
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "probeRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "scopes": {
+          "items": {
+            "$ref": "#/$defs/EncryptionScope"
+          },
+          "minItems": 1,
+          "title": "Scopes",
+          "type": "array"
+        },
+        "type": {
+          "const": "encryption",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "controlRefs",
+        "limitations",
+        "type",
+        "probeRef",
+        "scopes"
+      ],
+      "title": "EncryptionAssertion",
+      "type": "object"
+    },
+    "EncryptionScope": {
+      "description": "Encryption conditions supported by the fixed evaluator vocabulary.",
+      "enum": [
+        "atRest",
+        "inTransit"
+      ],
+      "title": "EncryptionScope",
+      "type": "string"
+    },
+    "EnvironmentName": {
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+      "type": "string"
+    },
+    "EnvironmentReference": {
+      "additionalProperties": false,
+      "description": "An explicit reference to a value supplied through the environment.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/EnvironmentName"
+        },
+        "source": {
+          "const": "environment",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "name"
+      ],
+      "title": "EnvironmentReference",
+      "type": "object"
+    },
+    "EvidencePolicy": {
+      "additionalProperties": false,
+      "description": "Suite-wide freshness and source-clock constraints.",
+      "properties": {
+        "clockSkewTolerance": {
+          "$ref": "#/$defs/FreshnessString",
+          "default": "PT30S"
+        },
+        "maxAge": {
+          "$ref": "#/$defs/FreshnessString"
+        }
+      },
+      "required": [
+        "maxAge"
+      ],
+      "title": "EvidencePolicy",
+      "type": "object"
+    },
+    "FreshnessString": {
+      "maxLength": 32,
+      "pattern": "^PT(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?$",
+      "type": "string"
+    },
+    "HeaderName": {
+      "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$",
+      "type": "string"
+    },
+    "Hostname": {
+      "maxLength": 253,
+      "pattern": "^(?:localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$",
+      "type": "string"
+    },
+    "HttpAction": {
+      "additionalProperties": false,
+      "description": "A bounded unsigned HTTP application request declaration.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "identityRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Identifier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "inputs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ActionInput"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "method": {
+          "$ref": "#/$defs/HttpMethod"
+        },
+        "mutating": {
+          "default": false,
+          "title": "Mutating",
+          "type": "boolean"
+        },
+        "path": {
+          "$ref": "#/$defs/RelativeHttpPath"
+        },
+        "timeoutSeconds": {
+          "$ref": "#/$defs/PositiveTimeout",
+          "default": 30
+        },
+        "type": {
+          "const": "http",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "path",
+        "type"
+      ],
+      "title": "HttpAction",
+      "type": "object"
+    },
+    "HttpMethod": {
+      "description": "Application methods supported by the non-executing schema.",
+      "enum": [
+        "GET",
+        "POST"
+      ],
+      "title": "HttpMethod",
+      "type": "string"
+    },
+    "Identifier": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+      "type": "string"
+    },
+    "Identity": {
+      "discriminator": {
+        "mapping": {
+          "awsAssumeRole": "#/$defs/AssumedRoleIdentity",
+          "awsCurrent": "#/$defs/CurrentAwsIdentity"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/CurrentAwsIdentity"
+        },
+        {
+          "$ref": "#/$defs/AssumedRoleIdentity"
+        }
+      ]
+    },
+    "InputLocation": {
+      "description": "Fixed request locations for declared action inputs.",
+      "enum": [
+        "header",
+        "query",
+        "json"
+      ],
+      "title": "InputLocation",
+      "type": "string"
+    },
+    "InputName": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+      "type": "string"
+    },
+    "InputValue": {
+      "discriminator": {
+        "mapping": {
+          "environment": "#/$defs/EnvironmentReference",
+          "literal": "#/$defs/LiteralInput"
+        },
+        "propertyName": "source"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/LiteralInput"
+        },
+        {
+          "$ref": "#/$defs/EnvironmentReference"
+        }
+      ]
+    },
+    "JsonValue": {},
+    "Limitation": {
+      "additionalProperties": false,
+      "description": "A mandatory, stable statement bounding an assessment claim.",
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        }
+      },
+      "required": [
+        "id",
+        "description"
+      ],
+      "title": "Limitation",
+      "type": "object"
+    },
+    "LiteralInput": {
+      "additionalProperties": false,
+      "description": "A declared non-secret, JSON-compatible action input.",
+      "properties": {
+        "sensitive": {
+          "const": false,
+          "title": "Sensitive",
+          "type": "boolean"
+        },
+        "source": {
+          "const": "literal",
+          "title": "Source",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "source",
+        "value",
+        "sensitive"
+      ],
+      "title": "LiteralInput",
+      "type": "object"
+    },
+    "NonEmptyString": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ObservationKind": {
+      "description": "Normalized observations that an alpha probe may request.",
+      "enum": [
+        "providerInvocation",
+        "telemetryCanary",
+        "auditEvent",
+        "encryptionState"
+      ],
+      "title": "ObservationKind",
+      "type": "string"
+    },
+    "PositiveTimeout": {
+      "maximum": 60,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "Probe": {
+      "discriminator": {
+        "mapping": {
+          "cloudTrail": "#/$defs/CloudTrailProbe",
+          "cloudWatchLogs": "#/$defs/CloudWatchLogsProbe"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/CloudWatchLogsProbe"
+        },
+        {
+          "$ref": "#/$defs/CloudTrailProbe"
+        }
+      ]
+    },
+    "ProviderBoundaryAssertion": {
+      "additionalProperties": false,
+      "description": "Require evidence to name only explicitly permitted model providers.",
+      "properties": {
+        "allowedProviders": {
+          "items": {
+            "$ref": "#/$defs/Identifier"
+          },
+          "minItems": 1,
+          "title": "Allowedproviders",
+          "type": "array"
+        },
+        "controlRefs": {
+          "items": {
+            "$ref": "#/$defs/ControlReference"
+          },
+          "minItems": 1,
+          "title": "Controlrefs",
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/Limitation"
+          },
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "probeRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "type": {
+          "const": "providerBoundary",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "controlRefs",
+        "limitations",
+        "type",
+        "probeRef",
+        "allowedProviders"
+      ],
+      "title": "ProviderBoundaryAssertion",
+      "type": "object"
+    },
+    "RelativeHttpPath": {
+      "maxLength": 2048,
+      "pattern": "^/(?:$|[^/\\s?#][^\\s?#]*)$",
+      "type": "string"
+    },
+    "Responsibility": {
+      "additionalProperties": false,
+      "description": "One party's responsibility within a control mapping.",
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "party": {
+          "$ref": "#/$defs/ResponsibleParty"
+        }
+      },
+      "required": [
+        "party",
+        "description"
+      ],
+      "title": "Responsibility",
+      "type": "object"
+    },
+    "ResponsibleParty": {
+      "description": "Parties whose responsibilities bound a control mapping.",
+      "enum": [
+        "verifier",
+        "cloudProvider",
+        "customer"
+      ],
+      "title": "ResponsibleParty",
+      "type": "string"
+    },
+    "ReviewMetadata": {
+      "additionalProperties": false,
+      "description": "Human review provenance for a compliance mapping.",
+      "properties": {
+        "reviewedAt": {
+          "format": "date",
+          "title": "Reviewedat",
+          "type": "string"
+        },
+        "reviewedBy": {
+          "$ref": "#/$defs/NonEmptyString"
+        }
+      },
+      "required": [
+        "reviewedBy",
+        "reviewedAt"
+      ],
+      "title": "ReviewMetadata",
+      "type": "object"
+    },
+    "Scenario": {
+      "additionalProperties": false,
+      "description": "A bounded group of declared actions, probes, and assertions.",
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/Action"
+          },
+          "minItems": 1,
+          "title": "Actions",
+          "type": "array"
+        },
+        "assertions": {
+          "items": {
+            "$ref": "#/$defs/Assertion"
+          },
+          "minItems": 1,
+          "title": "Assertions",
+          "type": "array"
+        },
+        "description": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "identityRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "probes": {
+          "items": {
+            "$ref": "#/$defs/Probe"
+          },
+          "minItems": 1,
+          "title": "Probes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "identityRef",
+        "actions",
+        "probes",
+        "assertions"
+      ],
+      "title": "Scenario",
+      "type": "object"
+    },
+    "SuiteMetadata": {
+      "additionalProperties": false,
+      "description": "Human-readable identity for one verification suite.",
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "name": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "owners": {
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          },
+          "minItems": 1,
+          "title": "Owners",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "owners"
+      ],
+      "title": "SuiteMetadata",
+      "type": "object"
+    },
+    "Target": {
+      "additionalProperties": false,
+      "description": "A bounded application endpoint and its AWS deployment context.",
+      "properties": {
+        "allowedHosts": {
+          "items": {
+            "$ref": "#/$defs/Hostname"
+          },
+          "minItems": 1,
+          "title": "Allowedhosts",
+          "type": "array"
+        },
+        "awsAccountId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AwsAccountId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "awsRegion": {
+          "$ref": "#/$defs/AwsRegion"
+        },
+        "endpoint": {
+          "format": "uri",
+          "minLength": 1,
+          "title": "Endpoint",
+          "type": "string"
+        },
+        "environment": {
+          "$ref": "#/$defs/DeploymentEnvironment"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        }
+      },
+      "required": [
+        "id",
+        "environment",
+        "endpoint",
+        "allowedHosts",
+        "awsRegion"
+      ],
+      "title": "Target",
+      "type": "object"
+    },
+    "TelemetryCanaryAssertion": {
+      "additionalProperties": false,
+      "description": "Require a secret canary to be correlated through normalized telemetry.",
+      "properties": {
+        "actionRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "canary": {
+          "$ref": "#/$defs/EnvironmentReference"
+        },
+        "controlRefs": {
+          "items": {
+            "$ref": "#/$defs/ControlReference"
+          },
+          "minItems": 1,
+          "title": "Controlrefs",
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/Limitation"
+          },
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "probeRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "type": {
+          "const": "telemetryCanary",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "controlRefs",
+        "limitations",
+        "type",
+        "actionRef",
+        "probeRef",
+        "canary"
+      ],
+      "title": "TelemetryCanaryAssertion",
+      "type": "object"
+    },
+    "UnauthorizedIdentityAssertion": {
+      "additionalProperties": false,
+      "description": "Require an application action under an unauthorized identity to fail.",
+      "properties": {
+        "actionRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "controlRefs": {
+          "items": {
+            "$ref": "#/$defs/ControlReference"
+          },
+          "minItems": 1,
+          "title": "Controlrefs",
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/Limitation"
+          },
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "type": {
+          "const": "unauthorizedIdentityDenied",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "controlRefs",
+        "limitations",
+        "type",
+        "actionRef"
+      ],
+      "title": "UnauthorizedIdentityAssertion",
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.cai-verify.dev/verification-suite/1alpha1/schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Root model for immutable verification-suite schema ``1alpha1``.",
+  "properties": {
+    "evidencePolicy": {
+      "$ref": "#/$defs/EvidencePolicy"
+    },
+    "identities": {
+      "items": {
+        "$ref": "#/$defs/Identity"
+      },
+      "minItems": 1,
+      "title": "Identities",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "$ref": "#/$defs/Limitation"
+      },
+      "minItems": 1,
+      "title": "Limitations",
+      "type": "array"
+    },
+    "metadata": {
+      "$ref": "#/$defs/SuiteMetadata"
+    },
+    "scenarios": {
+      "items": {
+        "$ref": "#/$defs/Scenario"
+      },
+      "minItems": 1,
+      "title": "Scenarios",
+      "type": "array"
+    },
+    "schemaVersion": {
+      "const": "1alpha1",
+      "title": "Schemaversion",
+      "type": "string"
+    },
+    "target": {
+      "$ref": "#/$defs/Target"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "metadata",
+    "target",
+    "identities",
+    "evidencePolicy",
+    "scenarios",
+    "limitations"
+  ],
+  "title": "VerificationSuite 1alpha1",
+  "type": "object"
+}
