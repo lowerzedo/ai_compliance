@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -32,6 +32,7 @@ _ROLE_ARN_PATTERN = re.compile(
     r"arn:(?P<partition>aws|aws-us-gov|aws-cn):iam::"
     r"(?P<account>\d{12}):role/.+\Z"
 )
+_HEADER_PAIR_SIZE = 2
 
 
 class AwsIdentityFailureCode(StrEnum):
@@ -126,6 +127,73 @@ class _BotocoreConfigModule(Protocol):
         ...
 
 
+class _AwsCredentials(Protocol):
+    def get_frozen_credentials(self) -> object:
+        """Return an immutable SDK credential snapshot for one signature."""
+        ...
+
+
+class _AwsSigningSession(Protocol):
+    def get_credentials(self) -> object | None:
+        """Return the SDK's opaque credential provider result."""
+        ...
+
+
+class _AwsRequest(Protocol):
+    context: dict[str, object]
+    headers: Mapping[str, object]
+
+
+class _SigV4Signer(Protocol):
+    def _modify_request_before_signing(self, request: _AwsRequest) -> None:
+        """Apply Botocore-owned date and session-token signing headers."""
+        ...
+
+    def canonical_request(self, request: _AwsRequest) -> str:
+        """Build Botocore's canonical request."""
+        ...
+
+    def string_to_sign(self, request: _AwsRequest, canonical_request: str) -> str:
+        """Build Botocore's string to sign."""
+        ...
+
+    def signature(self, string_to_sign: str, request: _AwsRequest) -> str:
+        """Calculate Botocore's SigV4 signature."""
+        ...
+
+    def _inject_signature_to_request(
+        self,
+        request: _AwsRequest,
+        signature: str,
+    ) -> None:
+        """Place Botocore's authorization header on the request."""
+        ...
+
+
+class _BotocoreAuthModule(Protocol):
+    def SigV4Auth(  # noqa: N802
+        self,
+        credentials: object,
+        service_name: str,
+        region_name: str,
+    ) -> _SigV4Signer:
+        """Construct Botocore's SigV4 signer."""
+        ...
+
+
+class _BotocoreAwsRequestModule(Protocol):
+    def AWSRequest(  # noqa: N802
+        self,
+        *,
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        data: bytes,
+    ) -> _AwsRequest:
+        """Construct Botocore's signable request."""
+        ...
+
+
 @final
 @dataclass(frozen=True, slots=True)
 class Boto3AwsSessionFactory:
@@ -217,6 +285,58 @@ class AwsScopedIdentity:
     def matches_partition(self, expected_partition: str) -> bool:
         """Compare an expected partition without returning the observed ARN."""
         return self._partition == expected_partition
+
+    def _sign_request(  # noqa: PLR0913 - exact signing fields remain explicit.
+        self,
+        *,
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+        service: str,
+        region: str,
+        signing_time: datetime,
+    ) -> tuple[tuple[str, str], ...]:
+        """Sign one request without returning credentials or credential objects."""
+        if self.closed or self._session is None:
+            message = "AWS identity lease is closed"
+            raise RuntimeError(message)
+        credentials = cast(
+            "_AwsCredentials | None",
+            cast("_AwsSigningSession", self._session).get_credentials(),
+        )
+        if credentials is None:
+            message = "AWS identity lease has no signing credentials"
+            raise RuntimeError(message)
+        frozen_credentials = credentials.get_frozen_credentials()
+        auth_module = _botocore_auth_module()
+        request_module = _botocore_awsrequest_module()
+        aws_request = request_module.AWSRequest(
+            method=method,
+            url=url,
+            headers=headers,
+            data=body,
+        )
+        aws_request.context["timestamp"] = signing_time.astimezone(UTC).strftime(
+            "%Y%m%dT%H%M%SZ"
+        )
+        signer = auth_module.SigV4Auth(
+            frozen_credentials,
+            service,
+            region,
+        )
+        # Botocore's public add_auth() owns its wall clock. Calling the same
+        # Botocore primitives with an injected timestamp keeps tests
+        # deterministic without reimplementing any signing cryptography.
+        signer._modify_request_before_signing(aws_request)  # noqa: SLF001
+        canonical_request = signer.canonical_request(aws_request)
+        string_to_sign = signer.string_to_sign(aws_request, canonical_request)
+        signature = signer.signature(string_to_sign, aws_request)
+        signer._inject_signature_to_request(  # noqa: SLF001
+            aws_request,
+            signature,
+        )
+        return _normalized_header_items(aws_request.headers.items())
 
     def close(self) -> None:
         """Release references to the SDK session and normalized principal data."""
@@ -506,3 +626,36 @@ def _botocore_config_module() -> _BotocoreConfigModule:
     except ModuleNotFoundError:
         raise _AwsSdkUnavailableError from None
     return cast("_BotocoreConfigModule", module)
+
+
+def _botocore_auth_module() -> _BotocoreAuthModule:
+    try:
+        module = importlib.import_module("botocore.auth")
+    except ModuleNotFoundError:
+        raise _AwsSdkUnavailableError from None
+    return cast("_BotocoreAuthModule", module)
+
+
+def _botocore_awsrequest_module() -> _BotocoreAwsRequestModule:
+    try:
+        module = importlib.import_module("botocore.awsrequest")
+    except ModuleNotFoundError:
+        raise _AwsSdkUnavailableError from None
+    return cast("_BotocoreAwsRequestModule", module)
+
+
+def _normalized_header_items(
+    items: Iterable[tuple[str, object]],
+) -> tuple[tuple[str, str], ...]:
+    normalized: list[tuple[str, str]] = []
+    for item in items:
+        if (
+            not isinstance(item, tuple)
+            or len(item) != _HEADER_PAIR_SIZE
+            or not isinstance(item[0], str)
+            or not isinstance(item[1], str)
+        ):
+            message = "Botocore returned invalid signing headers"
+            raise TypeError(message)
+        normalized.append((item[0], item[1]))
+    return tuple(sorted(normalized, key=lambda item: (item[0].lower(), item[0])))

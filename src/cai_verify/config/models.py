@@ -770,6 +770,19 @@ class VerificationSuite(_StrictModel):
         for scenario in self.scenarios:
             self._validate_scenario_references(scenario, identity_ids)
             self._validate_local_components(scenario)
+            conflicting_regions = sorted(
+                action.id
+                for action in scenario.actions
+                if isinstance(action, AwsSigV4Action)
+                and action.region is not None
+                and action.region != self.target.aws_region
+            )
+            if conflicting_regions:
+                joined = ", ".join(conflicting_regions)
+                message = (
+                    f"awsSigV4 action regions must match target awsRegion: {joined}"
+                )
+                raise ValueError(message)
         return self
 
     def _validate_local_components(self, scenario: Scenario) -> None:

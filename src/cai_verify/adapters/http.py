@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, final
 from urllib.parse import urlencode, urlsplit
 
+from cai_verify.adapters._limits import MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES
 from cai_verify.config import EnvironmentReference, HttpAction, LiteralInput
 from cai_verify.config.models import DeploymentEnvironment, InputLocation
 from cai_verify.core import RedactedValue
@@ -28,8 +29,6 @@ if TYPE_CHECKING:
 
     from cai_verify.core import JsonValue
 
-_MAX_RESPONSE_BYTES = 64 * 1024
-_MAX_REQUEST_BYTES = 16 * 1024
 _HTTP_SUCCESS_MIN = 200
 _HTTP_SUCCESS_MAX = 300
 _RESERVED_HEADERS = {
@@ -99,7 +98,7 @@ class HttpActionAdapter:
             separators=(",", ":"),
             sort_keys=True,
         ).encode()
-        if len(encoded_body) > _MAX_REQUEST_BYTES:
+        if len(encoded_body) > MAX_REQUEST_BYTES:
             return self._error_result(
                 action.id,
                 identity.principal,
@@ -243,11 +242,11 @@ def _send_request(  # noqa: PLR0913 - exact HTTP request fields are explicit.
     try:
         connection.request(method, path, body, headers)
         response = connection.getresponse()
-        content = response.read(_MAX_RESPONSE_BYTES + 1)
+        content = response.read(MAX_RESPONSE_BYTES + 1)
         return _HttpResponse(
             status=response.status,
             correlation_id=response.getheader("X-Cai-Correlation-Id"),
-            too_large=len(content) > _MAX_RESPONSE_BYTES,
+            too_large=len(content) > MAX_RESPONSE_BYTES,
         )
     except OSError, TimeoutError, http.client.HTTPException:
         return None
@@ -285,7 +284,7 @@ def _place_input(  # noqa: PLR0913 - destinations are explicit trust boundaries.
         if not isinstance(value, str):
             message = f"HTTP header input must resolve to text: {name}"
             raise TypeError(message)
-        if "\r" in value or "\n" in value or len(value) > _MAX_REQUEST_BYTES:
+        if "\r" in value or "\n" in value or len(value) > MAX_REQUEST_BYTES:
             message = f"HTTP header input is invalid: {name}"
             raise ValueError(message)
         headers[name] = value

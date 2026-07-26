@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING
 
 from cai_verify.plugins import (
     PLUGIN_API_VERSION,
+    ActionExecutionResult,
+    ActionExecutor,
+    ActionRequest,
     EvidenceProbe,
     ProbeRequest,
     ProbeResult,
@@ -17,6 +20,25 @@ from cai_verify.plugins import (
 
 if TYPE_CHECKING:
     from cai_verify.core import AssertionResult
+
+
+def assert_action_executor_contract(
+    executor: ActionExecutor,
+    request: ActionRequest,
+) -> ActionExecutionResult:
+    """Assert mandatory compatibility and exact normalized result behavior."""
+    assert executor.metadata.api_version == PLUGIN_API_VERSION
+    assert executor.metadata.capabilities
+
+    result = executor.execute_action(request)
+
+    assert type(result) is ActionExecutionResult
+    assert result.action_id == request.action.id
+    assert result.started_at.utcoffset() is not None
+    assert result.completed_at.utcoffset() is not None
+    assert result.completed_at >= result.started_at
+    assert result.limitations
+    return result
 
 
 def assert_evidence_probe_contract(

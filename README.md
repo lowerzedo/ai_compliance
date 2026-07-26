@@ -5,12 +5,12 @@ executing focused security-control tests against deployed AI applications and
 producing machine-readable evidence.
 
 This repository contains core assertion-result semantics, the strict `1alpha1`
-verification-suite configuration models, a read-only AWS identity doctor, and
-one executable local vertical slice. The local slice calls a loopback synthetic
-AI application, probes its process-local telemetry, evaluates four deterministic
-assertions, renders terminal and JSON reports, and finalizes an unsigned
-tamper-evident evidence run. It does not establish HIPAA, FedRAMP, NIST, or
-legal compliance.
+verification-suite configuration models, a read-only AWS identity doctor, a
+built-in AWS SigV4 application action adapter, and one executable local vertical
+slice. The local slice calls a loopback synthetic AI application, probes its
+process-local telemetry, evaluates four deterministic assertions, renders
+terminal and JSON reports, and finalizes an unsigned tamper-evident evidence
+run. It does not establish HIPAA, FedRAMP, NIST, or legal compliance.
 
 The generated suite contract is committed at
 [`schemas/verification-suite-1alpha1.schema.json`](schemas/verification-suite-1alpha1.schema.json).
@@ -95,6 +95,23 @@ account IDs, principal ARNs, profile values, external IDs, credentials, and SDK
 exception text. `READY` exits `0`; any failed preflight exits `2`. Readiness
 does not test service permissions, execute application actions, create
 evidence, or establish a security or compliance result.
+
+## AWS SigV4 application actions
+
+The built-in `AwsSigV4ActionAdapter` consumes an acquired
+`AwsScopedIdentity` and executes only validated, non-mutating `awsSigV4`
+actions for `execute-api` or `bedrock-runtime`. It uses Botocore for signing,
+supports literal and explicit environment inputs, and sends one bounded direct
+HTTPS request to the target's exact allowlisted hostname. Action and target
+regions must agree.
+
+The adapter does not follow redirects, use proxy or SDK endpoint overrides,
+retry requests, invoke the AWS CLI, or retain request bodies, response bodies,
+credentials, signing headers, environment values, or SDK exception text in its
+normalized result. It exposes an injected clock and transport for
+network-isolated deterministic tests. A cloud suite runner is intentionally
+not included in this slice; orchestration, probes, and evidence production
+remain later roadmap work.
 
 ## Evidence runs
 
