@@ -7,11 +7,11 @@ producing machine-readable evidence.
 This repository contains core assertion-result semantics, the strict `1alpha1`
 verification-suite configuration models, a read-only AWS identity doctor, a
 built-in AWS SigV4 application action adapter, a bounded CloudWatch Logs
-evidence probe, and one executable local vertical slice. The local slice calls
-a loopback synthetic AI application, probes its process-local telemetry,
-evaluates four deterministic assertions, renders terminal and JSON reports, and
-finalizes an unsigned tamper-evident evidence run. It does not establish HIPAA,
-FedRAMP, NIST, or legal compliance.
+evidence probe, a bounded CloudTrail audit probe, and one executable local
+vertical slice. The local slice calls a loopback synthetic AI application,
+probes its process-local telemetry, evaluates four deterministic assertions,
+renders terminal and JSON reports, and finalizes an unsigned tamper-evident
+evidence run. It does not establish HIPAA, FedRAMP, NIST, or legal compliance.
 
 The generated suite contract is committed at
 [`schemas/verification-suite-1alpha1.schema.json`](schemas/verification-suite-1alpha1.schema.json).
@@ -111,10 +111,20 @@ regions must agree.
 The adapter does not follow redirects, use proxy or SDK endpoint overrides,
 retry requests, invoke the AWS CLI, or retain request bodies, response bodies,
 credentials, signing headers, environment values, or SDK exception text in its
-normalized result. It exposes an injected clock and transport for
-network-isolated deterministic tests. A cloud suite runner is intentionally
-not included in this slice; complete cloud orchestration and evidence
-production remain later roadmap work.
+normalized result. The transport recognizes only the fixed AWS
+`X-Amzn-RequestId` response header for later CloudTrail correlation. It retains
+at most two bounded values in the additive, non-repr
+`ActionExecutionResult.aws_request_ids` field so a probe can distinguish one
+usable identifier from missing or multiple identifiers. Raw headers remain
+excluded. Caller-supplied `X-Amzn-RequestId` is reserved.
+
+The new action-result field defaults to an empty tuple, so existing constructors
+remain source compatible. Local action evidence serialization is unchanged.
+Alpha configurations that attempted to supply `X-Amzn-RequestId` as an action
+input are now rejected. The adapter exposes an injected clock and transport for
+network-isolated deterministic tests. A cloud suite runner is intentionally not
+included in this slice; complete cloud orchestration and evidence production
+remain later roadmap work.
 
 ## AWS CloudWatch Logs evidence
 
@@ -159,8 +169,49 @@ Raw log messages, canary values, prompts, responses, documents, credentials,
 environment values, account IDs, principal ARNs, and SDK diagnostics are
 discarded. The adapter does not evaluate an assertion or decide compliance.
 
-A complete AWS suite runner and CloudTrail collection remain separate roadmap
-slices.
+A complete AWS suite runner remains a separate roadmap slice.
+
+## AWS CloudTrail audit evidence
+
+The built-in `CloudTrailProbeAdapter` consumes an acquired
+`AwsScopedIdentity`, accepts only a validated `cloudTrail` declaration
+requesting `auditEvent`, and performs only regional
+`cloudtrail:LookupEvents`. It ignores SDK endpoint URL overrides and uses the
+same three-second connection, five-second read, and two-attempt client policy as
+the other AWS adapters. It does not use the AWS CLI, CloudTrail Lake, trail
+files, S3, Athena, or another CloudTrail API.
+
+CloudTrail `LookupEvents` accepts only one lookup attribute. The adapter
+therefore submits one exact `EventSource` attribute, then applies fixed local
+checks for the declared event names, target region and account, consistent
+outer/inner event IDs and times, and the action's single AWS request ID against
+CloudTrail's fixed `requestID` field. It never treats time, source, name,
+account, principal, region, another probe, or assertion input as correlation.
+Missing, multiple, contradictory, or unmatched request IDs fail closed.
+
+The lookup window is the action time plus or minus configured clock skew,
+clipped by collection time and the effective probe-level or suite-level
+freshness limit. Collection is limited to 15 seconds, a ten-minute maximum
+window, five pages, 100 examined events, 64 KiB per `CloudTrailEvent`, 256 KiB
+total event JSON, 32 accepted correlated events, 16 normalized event names, and
+8 KiB pagination tokens. Each SDK request asks for 33 records, one beyond the
+accepted correlated-event limit.
+
+Malformed, duplicate-key, stale, future-dated, oversized, conflicting,
+ambiguous, or partial evidence suppresses counts, event names, source/region
+matches, and every other positive fact. Normalized output contains only bounded
+counts, booleans, sorted event names, and a stable failure category. Raw
+`CloudTrailEvent` JSON, request/response elements, identities, resources,
+accounts, principals, addresses, user agents, credentials, environment values,
+request IDs, and SDK diagnostics are discarded.
+
+`LookupEvents` exposes recent CloudTrail event history, not CloudTrail Lake or
+trail-file data. In particular, an application action recorded only as a data
+event may not be available through this API; the result is missing evidence,
+never a positive audit fact. `encryptionState` and every observation other than
+`auditEvent` are unsupported because an event's existence, TLS, a KMS event
+name, or service defaults cannot prove a narrowly defined encryption state.
+The probe normalizes facts only and does not evaluate an assertion.
 
 ## Evidence runs
 

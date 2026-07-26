@@ -55,6 +55,7 @@ class _CaptureTransport:
     body: bytes = b"{}"
     echo_correlation: bool = True
     correlation_id: str | None = None
+    aws_request_ids: tuple[str, ...] = ("synthetic-aws-request-id",)
     error: Exception | None = None
     requests: list[action_module._AwsHttpRequest] = field(
         default_factory=list,
@@ -75,6 +76,7 @@ class _CaptureTransport:
             status=self.status,
             correlation_id=correlation_id,
             too_large=len(self.body) > MAX_RESPONSE_BYTES,
+            aws_request_ids=self.aws_request_ids,
         )
 
 
@@ -91,6 +93,7 @@ def test_validated_suite_action_to_signed_request_and_normalized_result() -> Non
 
     assert result.outcome is ActionOutcome.SUCCEEDED
     assert result.correlation_ids == ("aws-9503a2a4136a58c50e5c0ab3",)
+    assert result.aws_request_ids == ("synthetic-aws-request-id",)
     assert result.observed.to_json_value() == {
         "correlation_state": "MATCHED",
         "http_status": 200,
@@ -255,6 +258,7 @@ def test_missing_environment_reference_is_a_stable_error() -> None:
         "X-Amz-Date",
         "X-Amz-Security-Token",
         "X-Amz-Content-Sha256",
+        "X-Amzn-RequestId",
     ],
 )
 def test_caller_controlled_signing_and_transport_headers_are_rejected(
@@ -505,6 +509,7 @@ def test_default_transport_ignores_proxy_and_endpoint_environment(
     assert connections[0].host == "assistant.sandbox.example.test"
     assert connections[0].port == _DEFAULT_HTTPS_PORT
     assert connections[0].requested_target == "/v1/documents/synthetic/summarize"
+    assert result.aws_request_ids == ("transport-aws-request-id",)
 
 
 class _FakeHttpResponse:
@@ -517,6 +522,12 @@ class _FakeHttpResponse:
     def getheader(self, name: str) -> str | None:
         del name
         return None
+
+    def getheaders(self) -> list[tuple[str, str]]:
+        return [
+            ("Server", "synthetic"),
+            ("X-Amzn-RequestId", "transport-aws-request-id"),
+        ]
 
 
 class _FakeHttpsConnection:

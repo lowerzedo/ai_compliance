@@ -34,11 +34,15 @@ if TYPE_CHECKING:
     from cai_verify.core import JsonValue
 
 _AWS_REGION_PATTERN = re.compile(r"[a-z]{2}(?:-gov)?-[a-z]+-\d\Z")
+_AWS_REQUEST_ID_PATTERN = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}\Z",
+)
 _HTTP_SUCCESS_MIN = 200
 _HTTP_SUCCESS_MAX = 300
 _HTTP_STATUS_MIN = 100
 _HTTP_STATUS_MAX = 599
 _HTTPS_PORT = 443
+_MAX_AWS_REQUEST_IDS = 2
 _MAX_TIMEOUT_SECONDS = 60
 _SUPPORTED_SERVICES = frozenset({"bedrock-runtime", "execute-api"})
 _RESERVED_HEADERS = frozenset(
@@ -53,6 +57,7 @@ _RESERVED_HEADERS = frozenset(
         "trailer",
         "transfer-encoding",
         "upgrade",
+        "x-amzn-requestid",
         "x-amz-content-sha256",
         "x-amz-date",
         "x-amz-security-token",
@@ -117,6 +122,7 @@ class _AwsHttpResponse:
     status: int
     correlation_id: str | None = field(repr=False)
     too_large: bool
+    aws_request_ids: tuple[str, ...] = field(default=(), repr=False)
 
 
 class _AwsActionTransport(Protocol):
@@ -154,6 +160,7 @@ class _DirectHttpsTransport(_AwsActionTransport):
                 status=response.status,
                 correlation_id=response.getheader("X-Cai-Correlation-Id"),
                 too_large=len(body) > MAX_RESPONSE_BYTES,
+                aws_request_ids=_aws_request_ids(response.getheaders()),
             )
         finally:
             connection.close()
@@ -341,6 +348,7 @@ class AwsSigV4ActionAdapter:
             or type(response.status) is not int
             or not _HTTP_STATUS_MIN <= response.status <= _HTTP_STATUS_MAX
             or type(response.too_large) is not bool
+            or not _valid_aws_request_ids(response.aws_request_ids)
             or (
                 response.correlation_id is not None
                 and not isinstance(response.correlation_id, str)
@@ -382,6 +390,7 @@ class AwsSigV4ActionAdapter:
             observed=RedactedValue(observed),
             correlation_ids=correlations,
             limitations=_LIMITATIONS,
+            aws_request_ids=response.aws_request_ids,
         )
 
     def _error_result(
@@ -630,6 +639,28 @@ def _outcome(
     if _HTTP_SUCCESS_MIN <= status < _HTTP_SUCCESS_MAX:
         return ActionOutcome.SUCCEEDED, None
     return ActionOutcome.ERROR, AwsActionFailureCode.UNEXPECTED_HTTP_STATUS
+
+
+def _aws_request_ids(
+    headers: list[tuple[str, str]],
+) -> tuple[str, ...]:
+    """Retain at most two fixed AWS request-ID headers to signal ambiguity."""
+    values = [
+        value.strip() for name, value in headers if name.lower() == "x-amzn-requestid"
+    ]
+    return tuple(values[:_MAX_AWS_REQUEST_IDS])
+
+
+def _valid_aws_request_ids(value: object) -> bool:
+    return (
+        isinstance(value, tuple)
+        and len(value) <= _MAX_AWS_REQUEST_IDS
+        and all(
+            isinstance(item, str)
+            and _AWS_REQUEST_ID_PATTERN.fullmatch(item) is not None
+            for item in value
+        )
+    )
 
 
 def _normalized_time(value: datetime) -> datetime:

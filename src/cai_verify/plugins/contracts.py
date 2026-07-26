@@ -134,6 +134,7 @@ class ActionExecutionResult:
     observed: RedactedValue
     correlation_ids: tuple[str, ...]
     limitations: tuple[str, ...]
+    aws_request_ids: tuple[str, ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
         """Validate timing and normalized, non-secret output metadata."""
@@ -165,8 +166,14 @@ class ActionExecutionResult:
             field_name="limitations",
             allow_empty=False,
         )
+        aws_request_ids = _validate_bounded_identifier_sequence(
+            self.aws_request_ids,
+            field_name="aws_request_ids",
+            max_items=2,
+        )
         object.__setattr__(self, "correlation_ids", tuple(sorted(correlation_ids)))
         object.__setattr__(self, "limitations", tuple(sorted(limitations)))
+        object.__setattr__(self, "aws_request_ids", tuple(sorted(aws_request_ids)))
 
 
 @final
@@ -646,6 +653,24 @@ def _validate_string_tuple(
         ):
             message = f"{field_name} contains an invalid value"
             raise ValueError(message)
+    return value
+
+
+def _validate_bounded_identifier_sequence(
+    value: object,
+    *,
+    field_name: str,
+    max_items: int,
+) -> tuple[str, ...]:
+    """Validate a bounded tuple while preserving duplicate ambiguity signals."""
+    if not isinstance(value, tuple) or not all(isinstance(item, str) for item in value):
+        message = f"{field_name} must be a tuple of strings"
+        raise TypeError(message)
+    if len(value) > max_items:
+        message = f"{field_name} contains too many values"
+        raise ValueError(message)
+    for item in value:
+        _validate_identifier(item, field_name=field_name)
     return value
 
 

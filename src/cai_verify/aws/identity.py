@@ -85,6 +85,14 @@ class _AwsCloudWatchLogsClient(Protocol):
         ...
 
 
+class _AwsCloudTrailClient(Protocol):
+    """Exact read-only CloudTrail surface used by the built-in probe."""
+
+    def lookup_events(self, **kwargs: object) -> Mapping[str, object]:
+        """Return one bounded page from regional CloudTrail event history."""
+        ...
+
+
 class AwsSession(Protocol):
     """Opaque SDK session retained only for the lifetime of an identity lease."""
 
@@ -324,6 +332,43 @@ class AwsScopedIdentity:
             "_AwsCloudWatchLogsClient",
             self._session.client(
                 "logs",
+                config=config,
+                region_name=region,
+            ),
+        )
+
+    def _cloudtrail_client(
+        self,
+        *,
+        region: str,
+        evaluated_at: datetime,
+    ) -> _AwsCloudTrailClient:
+        """Create only the bounded CloudTrail client needed by the audit probe."""
+        now = _normalized_datetime(evaluated_at)
+        expires_at = self._expires_at
+        if (
+            self.closed
+            or self._session is None
+            or (
+                expires_at is not None
+                and (
+                    expires_at.tzinfo is None
+                    or expires_at.utcoffset() is None
+                    or expires_at.astimezone(UTC) <= now
+                )
+            )
+        ):
+            message = "AWS identity lease cannot create a CloudTrail client"
+            raise RuntimeError(message)
+        config = _bounded_client_config(
+            connect_timeout_seconds=_AWS_CONNECT_TIMEOUT_SECONDS,
+            read_timeout_seconds=_AWS_READ_TIMEOUT_SECONDS,
+            max_attempts=_AWS_MAX_ATTEMPTS,
+        )
+        return cast(
+            "_AwsCloudTrailClient",
+            self._session.client(
+                "cloudtrail",
                 config=config,
                 region_name=region,
             ),

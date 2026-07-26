@@ -1,6 +1,13 @@
 """Built-in AWS identities, readiness checks, actions, and evidence probes."""
 
 from cai_verify.aws.action import AwsActionFailureCode, AwsSigV4ActionAdapter
+from cai_verify.aws.cloudtrail import (
+    CLOUDTRAIL_ADAPTER_NAME,
+    CLOUDTRAIL_ADAPTER_VERSION,
+    CloudTrailProbeAdapter,
+    CloudTrailProbeError,
+    CloudTrailProbeFailureCode,
+)
 from cai_verify.aws.cloudwatch_logs import (
     CLOUDWATCH_LOGS_ADAPTER_NAME,
     CLOUDWATCH_LOGS_ADAPTER_VERSION,
@@ -29,6 +36,8 @@ from cai_verify.aws.identity import (
 
 __all__ = [
     "AWS_DOCTOR_SCHEMA_VERSION",
+    "CLOUDTRAIL_ADAPTER_NAME",
+    "CLOUDTRAIL_ADAPTER_VERSION",
     "CLOUDWATCH_LOGS_ADAPTER_NAME",
     "CLOUDWATCH_LOGS_ADAPTER_VERSION",
     "AssumedRoleAwsIdentityProvider",
@@ -44,6 +53,9 @@ __all__ = [
     "AwsSigV4ActionAdapter",
     "AwsStsClient",
     "Boto3AwsSessionFactory",
+    "CloudTrailProbeAdapter",
+    "CloudTrailProbeError",
+    "CloudTrailProbeFailureCode",
     "CloudWatchLogsProbeAdapter",
     "CloudWatchLogsProbeError",
     "CloudWatchLogsProbeFailureCode",
