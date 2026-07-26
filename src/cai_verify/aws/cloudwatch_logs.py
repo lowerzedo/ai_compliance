@@ -12,6 +12,12 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, cast, final
 
+from cai_verify.aws._retrieval_canary import (
+    MAX_RETRIEVAL_CANARY_BYTES,
+    RetrievalCanaryValidationFailure,
+    retrieval_canaries_are_distinct,
+    validated_retrieval_canary,
+)
 from cai_verify.aws.identity import (
     AwsScopedIdentity,
     _AwsCloudWatchLogsClient,
@@ -58,7 +64,7 @@ MAX_CLOUDWATCH_RETRIEVED_ITEMS = 10_000
 MAX_CLOUDWATCH_RETRIEVAL_MARKERS = 32
 MAX_CLOUDWATCH_RETRIEVAL_MARKER_BYTES = 1024
 MAX_CLOUDWATCH_RETRIEVAL_TOTAL_MARKER_BYTES = 3 * 1024
-MAX_CLOUDWATCH_RETRIEVAL_CANARY_BYTES = 1024
+MAX_CLOUDWATCH_RETRIEVAL_CANARY_BYTES = MAX_RETRIEVAL_CANARY_BYTES
 MAX_BEDROCK_MODEL_ID_BYTES = 2 * 1024
 
 _MAX_FRESHNESS = timedelta(hours=24)
@@ -583,7 +589,7 @@ class CloudWatchLogsProbeAdapter:
         failure = baseline_failure or boundary_failure
         if failure is not None or baseline is None or boundary is None:
             return None, failure or CloudWatchLogsProbeFailureCode.INVALID_CONFIGURATION
-        if hmac.compare_digest(baseline, boundary):
+        if not retrieval_canaries_are_distinct(baseline, boundary):
             return None, CloudWatchLogsProbeFailureCode.ENVIRONMENT_VALUE_INVALID
         return (
             _RetrievalExpectation(
@@ -593,7 +599,7 @@ class CloudWatchLogsProbeAdapter:
             None,
         )
 
-    def _retrieval_canary(  # noqa: PLR0911 - invalid states remain explicit.
+    def _retrieval_canary(
         self,
         reference: object,
     ) -> tuple[bytes | None, CloudWatchLogsProbeFailureCode | None]:
@@ -606,16 +612,11 @@ class CloudWatchLogsProbeAdapter:
             value: object = self.environment[reference.name]
         except Exception:  # noqa: BLE001 - environment mappings are untrusted.
             return None, CloudWatchLogsProbeFailureCode.ENVIRONMENT_VALUE_INVALID
-        if type(value) is not str or not value:
-            return None, CloudWatchLogsProbeFailureCode.ENVIRONMENT_VALUE_INVALID
-        try:
-            encoded = value.encode("utf-8")
-        except UnicodeEncodeError:
-            return None, CloudWatchLogsProbeFailureCode.ENVIRONMENT_VALUE_INVALID
-        if not encoded:
-            return None, CloudWatchLogsProbeFailureCode.ENVIRONMENT_VALUE_INVALID
-        if len(encoded) > MAX_CLOUDWATCH_RETRIEVAL_CANARY_BYTES:
+        encoded, failure = validated_retrieval_canary(value)
+        if failure is RetrievalCanaryValidationFailure.LIMIT_EXCEEDED:
             return None, CloudWatchLogsProbeFailureCode.CANARY_VALUE_LIMIT_EXCEEDED
+        if failure is not None:
+            return None, CloudWatchLogsProbeFailureCode.ENVIRONMENT_VALUE_INVALID
         return encoded, None
 
     def _query(  # noqa: C901, PLR0912, PLR0913, PLR0915

@@ -9,8 +9,9 @@ verification-suite configuration models, a read-only AWS identity doctor, a
 built-in AWS SigV4 application action adapter, a bounded CloudWatch Logs
 evidence probe with Amazon Bedrock invocation and pre-generation
 retrieval-canary normalization, a deterministic paired-canary retrieval
-boundary evaluator, a bounded CloudTrail audit probe, and one executable local
-vertical slice. The local slice calls a loopback synthetic AI application,
+boundary evaluator, a bounded retrieval readiness doctor, a minimal
+single-chain AWS retrieval runner, a bounded CloudTrail audit probe, and one
+executable local vertical slice. The local slice calls a loopback synthetic AI application,
 probes its process-local telemetry, evaluates four deterministic assertions,
 renders terminal and JSON reports, and finalizes an unsigned tamper-evident
 evidence run. It does not establish HIPAA, FedRAMP, NIST, or legal compliance.
@@ -111,6 +112,58 @@ exception text. `READY` exits `0`; any failed preflight exits `2`. Readiness
 does not test service permissions, execute application actions, create
 evidence, or establish a security or compliance result.
 
+## Retrieval evidence readiness doctor
+
+Check whether each scenario-local `retrievalBoundary` chain is ready for a
+later execution attempt:
+
+```console
+uv run cai-verify doctor retrieval SUITE.json
+```
+
+Use `--report json` for the canonical version-1 machine-readable result. The
+command selects only chains from a retrieval-boundary assertion through its
+referenced CloudWatch Logs retrieval-canary probe and action. It resolves only
+the environment values and effective AWS identities those chains require,
+validates the paired canary contract, and issues one bounded
+`logs:FilterLogEvents` access preflight for each unique identity, target region,
+and declared log group.
+
+`READY TO ATTEMPT` exits `0`; not-ready, incomplete, resource-limit, and
+unexpected failures exit `2`. Readiness means only that configuration,
+identity boundaries, paired-canary declarations, and exact CloudWatch Logs
+source access passed preflight. The doctor does not execute or sign the
+application action, generate a correlation identifier, parse telemetry, or
+create evidence. A later execution must still establish the exact action
+correlation echo, exactly correlated pre-generation telemetry, baseline
+document retrievability, boundary-document exclusion, and complete fresh
+evidence. The command does not establish that telemetry was emitted, canary
+documents exist, retrieval or context scanning occurred, tenant isolation
+passed, or compliance was established.
+
+## Minimal AWS retrieval runner
+
+After preflight, one explicitly selected, pre-seeded retrieval-boundary chain
+can be executed with:
+
+```console
+uv run cai-verify run-aws-retrieval SUITE.json \
+  --assertion-id requester-a-retrieval-boundary \
+  --run-id synthetic-retrieval-run
+```
+
+The runner resolves that assertion's scenario-local action and CloudWatch Logs
+probe, acquires their effective AWS identities once, performs one non-mutating
+`execute-api` SigV4 action, collects the fixed CloudWatch Logs 1.2.0 retrieval
+observation, and applies the deterministic `RetrievalBoundaryEvaluator`. Use
+`--report json` for the canonical assertion report. Assertion exit codes retain
+the normal `PASS`/`FAIL`/`ERROR`/`INCONCLUSIVE`/`SKIPPED` semantics.
+
+This deliberately narrow runner handles one existing paired-canary chain. It
+does not create canary documents, run multiple assertions, persist an evidence
+bundle, mutate cloud state, discover permissions, or establish tenant isolation
+beyond the selected fresh evidence path. It does not establish compliance.
+
 ## AWS SigV4 application actions
 
 The built-in `AwsSigV4ActionAdapter` consumes an acquired
@@ -134,9 +187,9 @@ The new action-result field defaults to an empty tuple, so existing constructors
 remain source compatible. Local action evidence serialization is unchanged.
 Alpha configurations that attempted to supply `X-Amzn-RequestId` as an action
 input are now rejected. The adapter exposes an injected clock and transport for
-network-isolated deterministic tests. A cloud suite runner is intentionally not
-included in this slice; complete cloud orchestration and evidence production
-remain later roadmap work.
+network-isolated deterministic tests. The minimal retrieval runner composes
+this adapter for one selected chain; general cloud orchestration and evidence
+production remain later roadmap work.
 
 ## AWS CloudWatch Logs evidence
 
@@ -242,7 +295,8 @@ instrumented target can emit false records, and `PRE_GENERATION` is not
 cryptographically proven. Model output, refusal, or silence cannot prove what
 the final retrieval context contained.
 
-A complete AWS suite runner remains a separate roadmap slice.
+Only the minimal single-chain retrieval runner composes this probe. General AWS
+suite orchestration remains a separate roadmap slice.
 
 ## Paired-canary retrieval-boundary evaluation
 
@@ -281,8 +335,9 @@ The committed
 requester A, requester B, and a separate evidence-reader identity. It reverses
 the baseline and boundary canaries for the two requesters and drives
 network-isolated isolated/vulnerable evaluator contract tests. The fixture
-does not execute AWS. It adds no cloud runner or cross-action aggregate
-assertion.
+does not execute AWS by itself. The minimal runner can select one assertion
+from an equivalent validated runtime JSON suite; there is still no cross-action
+aggregate assertion.
 
 ## AWS CloudTrail audit evidence
 

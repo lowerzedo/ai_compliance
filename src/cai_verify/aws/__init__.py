@@ -33,6 +33,26 @@ from cai_verify.aws.identity import (
     Boto3AwsSessionFactory,
     CurrentAwsIdentityProvider,
 )
+from cai_verify.aws.retrieval_doctor import (
+    MAX_RETRIEVAL_ASSERTIONS,
+    MAX_RETRIEVAL_DOCTOR_SECONDS,
+    MAX_RETRIEVAL_FINDINGS,
+    MAX_RETRIEVAL_IDENTITIES,
+    MAX_RETRIEVAL_SOURCES,
+    RETRIEVAL_DOCTOR_SCHEMA_VERSION,
+    RetrievalCorrelationState,
+    RetrievalDoctorIssueCode,
+    RetrievalDoctorResult,
+    RetrievalReadinessCheck,
+    run_retrieval_doctor,
+)
+from cai_verify.aws.retrieval_runner import (
+    AwsRetrievalRunError,
+    AwsRetrievalRunFailureCode,
+    AwsRetrievalRunOptions,
+    AwsRetrievalRunResult,
+    run_aws_retrieval_chain,
+)
 
 __all__ = [
     "AWS_DOCTOR_SCHEMA_VERSION",
@@ -40,6 +60,12 @@ __all__ = [
     "CLOUDTRAIL_ADAPTER_VERSION",
     "CLOUDWATCH_LOGS_ADAPTER_NAME",
     "CLOUDWATCH_LOGS_ADAPTER_VERSION",
+    "MAX_RETRIEVAL_ASSERTIONS",
+    "MAX_RETRIEVAL_DOCTOR_SECONDS",
+    "MAX_RETRIEVAL_FINDINGS",
+    "MAX_RETRIEVAL_IDENTITIES",
+    "MAX_RETRIEVAL_SOURCES",
+    "RETRIEVAL_DOCTOR_SCHEMA_VERSION",
     "AssumedRoleAwsIdentityProvider",
     "AwsActionFailureCode",
     "AwsDoctorIssueCode",
@@ -47,6 +73,10 @@ __all__ = [
     "AwsIdentityCheck",
     "AwsIdentityError",
     "AwsIdentityFailureCode",
+    "AwsRetrievalRunError",
+    "AwsRetrievalRunFailureCode",
+    "AwsRetrievalRunOptions",
+    "AwsRetrievalRunResult",
     "AwsScopedIdentity",
     "AwsSession",
     "AwsSessionFactory",
@@ -60,5 +90,11 @@ __all__ = [
     "CloudWatchLogsProbeError",
     "CloudWatchLogsProbeFailureCode",
     "CurrentAwsIdentityProvider",
+    "RetrievalCorrelationState",
+    "RetrievalDoctorIssueCode",
+    "RetrievalDoctorResult",
+    "RetrievalReadinessCheck",
     "run_aws_doctor",
+    "run_aws_retrieval_chain",
+    "run_retrieval_doctor",
 ]

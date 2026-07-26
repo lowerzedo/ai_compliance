@@ -9,7 +9,12 @@ from typing import Annotated
 import typer
 
 from cai_verify import __version__
-from cai_verify.aws import run_aws_doctor
+from cai_verify.aws import (
+    AwsRetrievalRunOptions,
+    run_aws_doctor,
+    run_aws_retrieval_chain,
+    run_retrieval_doctor,
+)
 from cai_verify.config import load_suite
 from cai_verify.core import CliExitCode
 from cai_verify.evidence import verify_run_integrity
@@ -80,6 +85,37 @@ def doctor_aws(
         raise typer.Exit(code=int(CliExitCode.EXECUTION_ERROR))
 
 
+@doctor_app.command("retrieval")
+def doctor_retrieval(
+    suite_path: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+        ),
+    ],
+    report: Annotated[ReportFormat, typer.Option("--report")] = ReportFormat.TERMINAL,
+) -> None:
+    """Check whether retrieval-boundary chains are ready to be attempted."""
+    try:
+        suite = load_suite(suite_path)
+        result = run_retrieval_doctor(suite, environment=os.environ)
+    except Exception:  # noqa: BLE001 - public diagnostics must remain redacted.
+        typer.echo("retrieval doctor failed", err=True)
+        raise typer.Exit(code=int(CliExitCode.EXECUTION_ERROR)) from None
+    content = (
+        result.to_json_bytes()
+        if report is ReportFormat.JSON
+        else result.to_terminal_bytes()
+    )
+    typer.echo(content.decode(), nl=False)
+    if not result.ready:
+        raise typer.Exit(code=int(CliExitCode.EXECUTION_ERROR))
+
+
 @app.command("run-local")
 def run_local(
     suite_path: Annotated[
@@ -114,6 +150,44 @@ def run_local(
     except Exception:  # noqa: BLE001 - public diagnostics must remain redacted.
         typer.echo("local run failed", err=True)
         raise typer.Exit(code=2) from None
+    content = (
+        result.json_report if report is ReportFormat.JSON else result.terminal_report
+    )
+    typer.echo(content.decode(), nl=False)
+    if result.exit_code:
+        raise typer.Exit(code=int(result.exit_code))
+
+
+@app.command("run-aws-retrieval")
+def run_aws_retrieval(
+    suite_path: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+        ),
+    ],
+    assertion_id: Annotated[str, typer.Option("--assertion-id")],
+    run_id: Annotated[str, typer.Option("--run-id")],
+    report: Annotated[ReportFormat, typer.Option("--report")] = ReportFormat.TERMINAL,
+) -> None:
+    """Run one pre-seeded AWS retrieval-boundary chain."""
+    try:
+        suite = load_suite(suite_path)
+        result = run_aws_retrieval_chain(
+            suite,
+            AwsRetrievalRunOptions(
+                run_id=run_id,
+                assertion_id=assertion_id,
+                environment=os.environ,
+            ),
+        )
+    except Exception:  # noqa: BLE001 - public diagnostics must remain redacted.
+        typer.echo("AWS retrieval run failed", err=True)
+        raise typer.Exit(code=int(CliExitCode.EXECUTION_ERROR)) from None
     content = (
         result.json_report if report is ReportFormat.JSON else result.terminal_report
     )
