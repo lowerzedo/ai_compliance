@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import TYPE_CHECKING
 
+from cai_verify.core import AssertionResult
 from cai_verify.plugins import (
     PLUGIN_API_VERSION,
     ActionExecutionResult,
     ActionExecutor,
     ActionRequest,
+    AssertionEvaluationRequest,
+    AssertionEvaluator,
     EvidenceProbe,
     ProbeRequest,
     ProbeResult,
@@ -17,9 +19,6 @@ from cai_verify.plugins import (
     Reporter,
     ReportRequest,
 )
-
-if TYPE_CHECKING:
-    from cai_verify.core import AssertionResult
 
 
 def assert_action_executor_contract(
@@ -61,6 +60,25 @@ def assert_evidence_probe_contract(
     assert result.freshness.freshness_limit > (
         result.freshness.source_time or result.freshness.collected_at
     )
+    return result
+
+
+def assert_assertion_evaluator_contract(
+    evaluator: AssertionEvaluator,
+    request: AssertionEvaluationRequest,
+) -> AssertionResult:
+    """Assert evaluator compatibility and exact immutable result behavior."""
+    assert evaluator.metadata.api_version == PLUGIN_API_VERSION
+    assert evaluator.metadata.capabilities
+
+    result = evaluator.evaluate_assertion(request)
+
+    assert type(result) is AssertionResult
+    assert result.assertion_id == request.assertion.id
+    assert result.evaluator_version
+    assert result.evaluation_started_at.utcoffset() is not None
+    assert result.evaluation_completed_at >= result.evaluation_started_at
+    assert result.limitations
     return result
 
 

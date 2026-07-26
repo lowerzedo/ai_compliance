@@ -8,12 +8,12 @@ This repository contains core assertion-result semantics, the strict `1alpha1`
 verification-suite configuration models, a read-only AWS identity doctor, a
 built-in AWS SigV4 application action adapter, a bounded CloudWatch Logs
 evidence probe with Amazon Bedrock invocation and pre-generation
-retrieval-canary normalization, a bounded CloudTrail audit probe, and one
-executable local vertical slice. The local slice calls a loopback synthetic AI
-application, probes its process-local telemetry, evaluates four deterministic
-assertions, renders terminal and JSON reports, and finalizes an unsigned
-tamper-evident evidence run. It does not establish HIPAA, FedRAMP, NIST, or
-legal compliance.
+retrieval-canary normalization, a deterministic paired-canary retrieval
+boundary evaluator, a bounded CloudTrail audit probe, and one executable local
+vertical slice. The local slice calls a loopback synthetic AI application,
+probes its process-local telemetry, evaluates four deterministic assertions,
+renders terminal and JSON reports, and finalizes an unsigned tamper-evident
+evidence run. It does not establish HIPAA, FedRAMP, NIST, or legal compliance.
 
 The generated suite contract is committed at
 [`schemas/verification-suite-1alpha1.schema.json`](schemas/verification-suite-1alpha1.schema.json).
@@ -63,6 +63,9 @@ Compatibility notes for `1alpha1`:
   environment-backed baseline and boundary canaries. This is an intentional
   additive change to the unreleased `1alpha1` contract; existing suites remain
   valid.
+- `retrievalBoundary` is an additive assertion union member with only
+  `actionRef`, `probeRef`, and inherited claim boundaries. It requires a
+  matching non-local CloudWatch Logs probe requesting `retrievalCanary`.
 - The built-in loader accepts bounded duplicate-free JSON. General YAML parsing
   remains out of scope; PyYAML is test-only.
 
@@ -240,6 +243,46 @@ cryptographically proven. Model output, refusal, or silence cannot prove what
 the final retrieval context contained.
 
 A complete AWS suite runner remains a separate roadmap slice.
+
+## Paired-canary retrieval-boundary evaluation
+
+The built-in `RetrievalBoundaryEvaluator` consumes only the existing normalized
+`retrievalCanary` observation from `aws-cloudwatch-logs` version `1.2.0`. It
+does not resolve environment references, repeat canary comparisons, inspect raw
+telemetry or retrieved content, acquire credentials, or contact AWS.
+
+The strict assertion declaration contains only fixed references:
+
+```yaml
+type: retrievalBoundary
+actionRef: retrieve-as-requester-a
+probeRef: requester-a-retrieval
+```
+
+A `PASS` requires fresh action and probe evidence, exactly one action
+correlation and normalized retrieval record, complete pre-generation context
+scanning, successful retrieval and action execution, the baseline canary
+present, the declared boundary canary absent, and no undeclared marker. A fresh
+complete declared boundary canary is a `FAIL`, even when the baseline is absent
+or the application action later reports denial or error. Missing baselines,
+undeclared markers, denials, stale/partial/ambiguous evidence, and unexercised
+positive controls are `INCONCLUSIVE`; invalid or contradictory normalized
+shapes and action execution errors without a boundary contradiction are
+`ERROR`.
+
+Results contain only bounded booleans, counts, normalized state, fixed reasons,
+safe evidence IDs, and mandatory trust limitations. They never include canary
+or environment values, raw telemetry, retrieved content, document, tenant,
+identity, correlation, account or principal identifiers, credentials, prompts,
+responses, or SDK diagnostics.
+
+The committed
+`tests/fixtures/suites/valid/reciprocal-retrieval.yaml` fixture defines
+requester A, requester B, and a separate evidence-reader identity. It reverses
+the baseline and boundary canaries for the two requesters and drives
+network-isolated isolated/vulnerable evaluator contract tests. The fixture
+does not execute AWS. It adds no cloud runner or cross-action aggregate
+assertion.
 
 ## AWS CloudTrail audit evidence
 

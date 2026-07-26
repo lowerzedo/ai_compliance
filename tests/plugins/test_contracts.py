@@ -18,6 +18,7 @@ from cai_verify.core import (
 from cai_verify.plugins import (
     ActionExecutionResult,
     ActionOutcome,
+    AssertionEvaluationRequest,
     ExecutionContext,
     PluginMetadata,
     ProbeRequest,
@@ -26,6 +27,7 @@ from cai_verify.plugins import (
     ReportRequest,
 )
 from tests.plugins.contract_suite import (
+    assert_assertion_evaluator_contract,
     assert_evidence_probe_contract,
     assert_reporter_contract,
 )
@@ -95,6 +97,22 @@ def test_sample_probe_reports_source_and_freshness() -> None:
 
     assert result.source.name == "sample-source"
     assert result.source.version == "1.0.0"
+
+
+def test_sample_evaluator_returns_the_exact_result_contract() -> None:
+    """The shared evaluator contract preserves core result semantics."""
+    plugin = create_plugin()
+    probe_request = _probe_request()
+    probe_result = plugin.collect_evidence(probe_request)
+    request = AssertionEvaluationRequest(
+        assertion=_suite().scenarios[0].assertions[0],
+        action_results=(probe_request.action_result,),
+        probe_results=(probe_result,),
+    )
+
+    result = assert_assertion_evaluator_contract(plugin, request)
+
+    assert result.status is AssertionStatus.PASS
 
 
 def test_sample_reporter_cannot_mutate_assertion_results() -> None:

@@ -21,6 +21,7 @@ from cai_verify.config import (
     CloudWatchLogsProbe,
     HttpAction,
     LocalTelemetryProbe,
+    RetrievalBoundaryAssertion,
     RetrievalCanaryDeclaration,
     SafeModelAlias,
     SyntheticLocalIdentity,
@@ -31,6 +32,7 @@ from cai_verify.config import (
 
 _FIXTURES = Path(__file__).parents[1] / "fixtures" / "suites"
 _VALID_SUITE = _FIXTURES / "valid" / "full.yaml"
+_RECIPROCAL_RETRIEVAL_SUITE = _FIXTURES / "valid" / "reciprocal-retrieval.yaml"
 _SCHEMA_PATH = (
     Path(__file__).parents[2] / "schemas" / "verification-suite-1alpha1.schema.json"
 )
@@ -98,6 +100,121 @@ def test_local_json_fixture_validates_only_explicit_synthetic_components() -> No
     }
     assert suite.target.aws_region is None
     assert suite.target.aws_account_id is None
+
+
+def test_reciprocal_retrieval_fixture_validates_fixed_pairings() -> None:
+    """Two requesters invert baseline and boundary canaries under one reader."""
+    suite = VerificationSuite.model_validate(
+        _load_mapping(_RECIPROCAL_RETRIEVAL_SUITE),
+    )
+    scenario = suite.scenarios[0]
+    probes = {probe.id: probe for probe in scenario.probes}
+    probe_a = probes["requester-a-retrieval"]
+    probe_b = probes["requester-b-retrieval"]
+
+    assert {identity.id for identity in suite.identities} == {
+        "evidence-reader",
+        "requester-a",
+        "requester-b",
+    }
+    assert all(
+        isinstance(assertion, RetrievalBoundaryAssertion)
+        for assertion in scenario.assertions
+    )
+    assert isinstance(probe_a, CloudWatchLogsProbe)
+    assert isinstance(probe_b, CloudWatchLogsProbe)
+    assert probe_a.retrieval is not None
+    assert probe_b.retrieval is not None
+    assert probe_a.retrieval.baseline_canary.name == "SYNTHETIC_REQUESTER_A_CANARY"
+    assert probe_a.retrieval.boundary_canary.name == "SYNTHETIC_REQUESTER_B_CANARY"
+    assert probe_b.retrieval.baseline_canary.name == "SYNTHETIC_REQUESTER_B_CANARY"
+    assert probe_b.retrieval.boundary_canary.name == "SYNTHETIC_REQUESTER_A_CANARY"
+
+
+def test_retrieval_boundary_assertion_has_only_fixed_references() -> None:
+    """The assertion owns no canary, field-path, or truth-table configuration."""
+    data = _load_mapping(_RECIPROCAL_RETRIEVAL_SUITE)
+    assertion = data["scenarios"][0]["assertions"][0]
+    validated = RetrievalBoundaryAssertion.model_validate(assertion)
+
+    assert set(validated.model_dump(by_alias=True)) == {
+        "actionRef",
+        "controlRefs",
+        "id",
+        "limitations",
+        "probeRef",
+        "type",
+    }
+    for forbidden in (
+        "baselineCanary",
+        "boundaryCanary",
+        "expected",
+        "expression",
+        "fieldPath",
+    ):
+        invalid = deepcopy(assertion)
+        invalid[forbidden] = True
+        with pytest.raises(ValidationError):
+            RetrievalBoundaryAssertion.model_validate(invalid)
+
+
+def test_retrieval_boundary_requires_cloudwatch_retrieval_probe() -> None:
+    """Only the existing fixed CloudWatch retrieval contract is admissible."""
+    wrong_probe = _load_mapping(_RECIPROCAL_RETRIEVAL_SUITE)
+    probe = wrong_probe["scenarios"][0]["probes"][0]
+    probe.clear()
+    probe.update(
+        {
+            "actionRef": "retrieve-as-requester-a",
+            "eventNames": ["Invoke"],
+            "eventSource": "execute-api.amazonaws.com",
+            "id": "requester-a-retrieval",
+            "observations": ["auditEvent"],
+            "type": "cloudTrail",
+        },
+    )
+    missing_observation = _load_mapping(_RECIPROCAL_RETRIEVAL_SUITE)
+    probe = missing_observation["scenarios"][0]["probes"][0]
+    probe["observations"] = ["providerInvocation"]
+    probe.pop("retrieval")
+
+    assert "requires a cloudWatchLogs probe" in _validation_message(wrong_probe)
+    assert (
+        "must match the action and retrievalCanary observation"
+        in _validation_message(missing_observation)
+    )
+
+
+def test_retrieval_boundary_action_must_match_probe_action() -> None:
+    """A scenario-local assertion cannot pair evidence from another action."""
+    data = _load_mapping(_RECIPROCAL_RETRIEVAL_SUITE)
+    data["scenarios"][0]["assertions"][0]["actionRef"] = "retrieve-as-requester-b"
+
+    assert (
+        "must match the action and retrievalCanary observation"
+        in _validation_message(data)
+    )
+
+
+def test_retrieval_boundary_rejects_local_targets() -> None:
+    """Cloud retrieval evidence cannot be relabeled as a local assertion."""
+    data = json.loads(_LOCAL_SUITE.read_bytes())
+    scenario = data["scenarios"][0]
+    assertion = deepcopy(scenario["assertions"][0])
+    assertion.update(
+        {
+            "actionRef": scenario["actions"][0]["id"],
+            "id": "local-retrieval-boundary",
+            "probeRef": scenario["probes"][0]["id"],
+            "type": "retrievalBoundary",
+        },
+    )
+    assertion.pop("expectedStatus")
+    scenario["assertions"].append(assertion)
+
+    assert "local scenarios support only local assertion types" in _validation_message(
+        cast("SuiteMapping", data),
+    )
 
 
 def test_local_components_cannot_be_mixed_with_cloud_targets() -> None:

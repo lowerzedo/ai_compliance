@@ -1,0 +1,140 @@
+schemaVersion: 1alpha1
+metadata:
+  name: reciprocal-retrieval-boundaries
+  description: Validate reciprocal paired-canary retrieval contracts without AWS execution.
+  owners:
+    - security@example.test
+target:
+  id: synthetic-retrieval-application
+  environment: sandbox
+  endpoint: https://retrieval.sandbox.example.test/v1
+  allowedHosts:
+    - retrieval.sandbox.example.test
+  awsRegion: eu-west-2
+  awsAccountId: "111122223333"
+identities:
+  - id: requester-a
+    type: awsAssumeRole
+    roleArn: arn:aws:iam::111122223333:role/cai-verify-requester-a
+    sessionName: cai-verify-requester-a
+  - id: requester-b
+    type: awsAssumeRole
+    roleArn: arn:aws:iam::111122223333:role/cai-verify-requester-b
+    sessionName: cai-verify-requester-b
+  - id: evidence-reader
+    type: awsAssumeRole
+    roleArn: arn:aws:iam::111122223333:role/cai-verify-read-only-evidence
+    sessionName: cai-verify-evidence-reader
+evidencePolicy:
+  maxAge: PT5M
+  clockSkewTolerance: PT30S
+scenarios:
+  - id: reciprocal-requester-retrieval
+    description: Establish reciprocal configuration and evaluator contracts only.
+    identityRef: requester-a
+    actions:
+      - id: retrieve-as-requester-a
+        type: awsSigV4
+        identityRef: requester-a
+        method: POST
+        path: /retrieve
+        inputs:
+          - location: json
+            name: syntheticQuery
+            value:
+              source: literal
+              value: requester-a-baseline
+              sensitive: false
+        timeoutSeconds: 15
+        mutating: false
+        service: execute-api
+        region: eu-west-2
+      - id: retrieve-as-requester-b
+        type: awsSigV4
+        identityRef: requester-b
+        method: POST
+        path: /retrieve
+        inputs:
+          - location: json
+            name: syntheticQuery
+            value:
+              source: literal
+              value: requester-b-baseline
+              sensitive: false
+        timeoutSeconds: 15
+        mutating: false
+        service: execute-api
+        region: eu-west-2
+    probes:
+      - id: requester-a-retrieval
+        type: cloudWatchLogs
+        identityRef: evidence-reader
+        actionRef: retrieve-as-requester-a
+        observations:
+          - retrievalCanary
+        maxAge: PT3M
+        logGroup: /aws/cai-verify/synthetic-retrieval
+        retrieval:
+          baselineCanary:
+            source: environment
+            name: SYNTHETIC_REQUESTER_A_CANARY
+          boundaryCanary:
+            source: environment
+            name: SYNTHETIC_REQUESTER_B_CANARY
+      - id: requester-b-retrieval
+        type: cloudWatchLogs
+        identityRef: evidence-reader
+        actionRef: retrieve-as-requester-b
+        observations:
+          - retrievalCanary
+        maxAge: PT3M
+        logGroup: /aws/cai-verify/synthetic-retrieval
+        retrieval:
+          baselineCanary:
+            source: environment
+            name: SYNTHETIC_REQUESTER_B_CANARY
+          boundaryCanary:
+            source: environment
+            name: SYNTHETIC_REQUESTER_A_CANARY
+    assertions:
+      - id: requester-a-retrieval-boundary
+        type: retrievalBoundary
+        actionRef: retrieve-as-requester-a
+        probeRef: requester-a-retrieval
+        controlRefs:
+          - &synthetic_control
+            source: Synthetic contract source
+            sourceVersion: "1"
+            reference: retrieval-boundary-contract
+            relationship: supports-assessment
+            rationale: The scenario exercises one synthetic paired-canary boundary.
+            scope: Configuration and deterministic evaluator contracts only.
+            limitations:
+              - &mapping_limitation
+                id: synthetic-contract-only
+                description: This fixture does not execute AWS or establish compliance.
+            responsibilities:
+              - party: verifier
+                description: Validate only normalized synthetic evidence.
+              - party: cloudProvider
+                description: No cloud service is contacted by this fixture.
+              - party: customer
+                description: Supply correct synthetic canary placement in later execution.
+            review:
+              reviewedBy: security-reviewer@example.test
+              reviewedAt: 2026-07-26
+        limitations:
+          - &assertion_limitation
+            id: reciprocal-contract-only
+            description: This assertion fixture defines a contract and does not execute AWS.
+      - id: requester-b-retrieval-boundary
+        type: retrievalBoundary
+        actionRef: retrieve-as-requester-b
+        probeRef: requester-b-retrieval
+        controlRefs:
+          - *synthetic_control
+        limitations:
+          - *assertion_limitation
+limitations:
+  - id: technical-assessment-only
+    description: Passing evaluator results do not establish legal or framework compliance.

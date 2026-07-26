@@ -756,6 +756,14 @@ class AuditPrincipalCorrelatedAssertion(_BaseAssertion):
     probe_ref: Identifier
 
 
+class RetrievalBoundaryAssertion(_BaseAssertion):
+    """Require paired-canary evidence to respect one retrieval boundary."""
+
+    type: Literal["retrievalBoundary"]
+    action_ref: Identifier
+    probe_ref: Identifier
+
+
 type Assertion = Annotated[
     UnauthorizedIdentityAssertion
     | ProviderBoundaryAssertion
@@ -765,7 +773,8 @@ type Assertion = Annotated[
     | ApplicationStatusAssertion
     | TelemetryCanaryAbsentAssertion
     | AuditEventPresentAssertion
-    | AuditPrincipalCorrelatedAssertion,
+    | AuditPrincipalCorrelatedAssertion
+    | RetrievalBoundaryAssertion,
     Field(discriminator="type"),
 ]
 
@@ -944,26 +953,43 @@ class VerificationSuite(_StrictModel):
     def _validate_cloud_components(scenario: Scenario) -> None:
         probes_by_id = {probe.id: probe for probe in scenario.probes}
         for assertion in scenario.assertions:
-            if not isinstance(assertion, TelemetryCanaryAssertion):
-                continue
-            probe = probes_by_id[assertion.probe_ref]
-            if not isinstance(probe, CloudWatchLogsProbe):
-                message = (
-                    f"telemetry canary assertion {assertion.id!r} requires "
-                    "a cloudWatchLogs probe"
-                )
-                raise ValueError(message)  # noqa: TRY004 - semantic validation.
-            if (
-                assertion.action_ref != probe.action_ref
-                or ObservationKind.TELEMETRY_CANARY not in probe.observations
-                or assertion.canary != probe.canary
-            ):
-                message = (
-                    f"telemetry canary assertion {assertion.id!r} must match "
-                    f"the action, observation, and canary declared by probe "
-                    f"{probe.id!r}"
-                )
-                raise ValueError(message)
+            if isinstance(assertion, TelemetryCanaryAssertion):
+                probe = probes_by_id[assertion.probe_ref]
+                if not isinstance(probe, CloudWatchLogsProbe):
+                    message = (
+                        f"telemetry canary assertion {assertion.id!r} requires "
+                        "a cloudWatchLogs probe"
+                    )
+                    raise ValueError(message)  # noqa: TRY004 - semantic validation.
+                if (
+                    assertion.action_ref != probe.action_ref
+                    or ObservationKind.TELEMETRY_CANARY not in probe.observations
+                    or assertion.canary != probe.canary
+                ):
+                    message = (
+                        f"telemetry canary assertion {assertion.id!r} must match "
+                        f"the action, observation, and canary declared by probe "
+                        f"{probe.id!r}"
+                    )
+                    raise ValueError(message)
+            elif isinstance(assertion, RetrievalBoundaryAssertion):
+                probe = probes_by_id[assertion.probe_ref]
+                if not isinstance(probe, CloudWatchLogsProbe):
+                    message = (
+                        f"retrieval boundary assertion {assertion.id!r} requires "
+                        "a cloudWatchLogs probe"
+                    )
+                    raise ValueError(message)  # noqa: TRY004 - semantic validation.
+                if (
+                    assertion.action_ref != probe.action_ref
+                    or ObservationKind.RETRIEVAL_CANARY not in probe.observations
+                ):
+                    message = (
+                        f"retrieval boundary assertion {assertion.id!r} must match "
+                        f"the action and retrievalCanary observation declared by "
+                        f"probe {probe.id!r}"
+                    )
+                    raise ValueError(message)
 
     def render_resolved_redacted(self, environment: Mapping[str, str]) -> str:
         """Validate environment resolution and render only redacted JSON.

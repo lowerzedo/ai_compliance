@@ -105,6 +105,7 @@
           "auditCorrelation": "#/$defs/AuditCorrelationAssertion",
           "encryption": "#/$defs/EncryptionAssertion",
           "providerBoundary": "#/$defs/ProviderBoundaryAssertion",
+          "retrievalBoundary": "#/$defs/RetrievalBoundaryAssertion",
           "telemetry.canary-absent": "#/$defs/TelemetryCanaryAbsentAssertion",
           "telemetryCanary": "#/$defs/TelemetryCanaryAssertion",
           "unauthorizedIdentityDenied": "#/$defs/UnauthorizedIdentityAssertion"
@@ -138,6 +139,9 @@
         },
         {
           "$ref": "#/$defs/AuditPrincipalCorrelatedAssertion"
+        },
+        {
+          "$ref": "#/$defs/RetrievalBoundaryAssertion"
         }
       ]
     },
@@ -1172,6 +1176,52 @@
       ],
       "title": "ResponsibleParty",
       "type": "string"
+    },
+    "RetrievalBoundaryAssertion": {
+      "additionalProperties": false,
+      "description": "Require paired-canary evidence to respect one retrieval boundary.",
+      "properties": {
+        "actionRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "controlRefs": {
+          "items": {
+            "$ref": "#/$defs/ControlReference"
+          },
+          "minItems": 1,
+          "title": "Controlrefs",
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "limitations": {
+          "items": {
+            "$ref": "#/$defs/Limitation"
+          },
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "probeRef": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "type": {
+          "const": "retrievalBoundary",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "controlRefs",
+        "limitations",
+        "type",
+        "actionRef",
+        "probeRef"
+      ],
+      "title": "RetrievalBoundaryAssertion",
+      "type": "object"
     },
     "RetrievalCanaryDeclaration": {
       "additionalProperties": false,
