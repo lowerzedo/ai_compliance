@@ -6,11 +6,12 @@ producing machine-readable evidence.
 
 This repository contains core assertion-result semantics, the strict `1alpha1`
 verification-suite configuration models, a read-only AWS identity doctor, a
-built-in AWS SigV4 application action adapter, and one executable local vertical
-slice. The local slice calls a loopback synthetic AI application, probes its
-process-local telemetry, evaluates four deterministic assertions, renders
-terminal and JSON reports, and finalizes an unsigned tamper-evident evidence
-run. It does not establish HIPAA, FedRAMP, NIST, or legal compliance.
+built-in AWS SigV4 application action adapter, a bounded CloudWatch Logs
+evidence probe, and one executable local vertical slice. The local slice calls
+a loopback synthetic AI application, probes its process-local telemetry,
+evaluates four deterministic assertions, renders terminal and JSON reports, and
+finalizes an unsigned tamper-evident evidence run. It does not establish HIPAA,
+FedRAMP, NIST, or legal compliance.
 
 The generated suite contract is committed at
 [`schemas/verification-suite-1alpha1.schema.json`](schemas/verification-suite-1alpha1.schema.json).
@@ -51,6 +52,8 @@ Compatibility notes for `1alpha1`:
   `awsAccountId`.
 - Additive fields are rejected in this version. New fields or union variants
   require an explicit schema compatibility decision.
+- A `cloudWatchLogs` probe requesting `telemetryCanary` must now declare a
+  `canary` environment reference. Provider-only probes do not require it.
 - The built-in loader accepts bounded duplicate-free JSON. General YAML parsing
   remains out of scope; PyYAML is test-only.
 
@@ -110,8 +113,54 @@ retry requests, invoke the AWS CLI, or retain request bodies, response bodies,
 credentials, signing headers, environment values, or SDK exception text in its
 normalized result. It exposes an injected clock and transport for
 network-isolated deterministic tests. A cloud suite runner is intentionally
-not included in this slice; orchestration, probes, and evidence production
-remain later roadmap work.
+not included in this slice; complete cloud orchestration and evidence
+production remain later roadmap work.
+
+## AWS CloudWatch Logs evidence
+
+The built-in `CloudWatchLogsProbeAdapter` consumes an acquired
+`AwsScopedIdentity` and accepts only validated `cloudWatchLogs` declarations.
+It performs only `logs:FilterLogEvents`, in the target's declared region,
+against the probe's exact `logGroup`. SDK endpoint URL overrides are ignored.
+The SDK uses three-second connection and five-second read timeouts with at most
+two attempts.
+
+This slice normalizes only `providerInvocation` and `telemetryCanary`. A canary
+probe must carry its own explicit environment reference:
+
+```yaml
+type: cloudWatchLogs
+actionRef: signed-request
+observations:
+  - providerInvocation
+  - telemetryCanary
+logGroup: /aws/cai-verify/synthetic-assistant
+canary:
+  source: environment
+  name: SYNTHETIC_TELEMETRY_CANARY
+```
+
+Records use one fixed synthetic-application JSON format. Provider records
+contain exactly `schemaVersion`, `correlationId`, `eventTime`, `eventKind`, and
+`providerId`. Canary records replace `providerId` with `canary`. The adapter
+requires exactly one correlation ID from the completed action and compares
+canaries without returning their values.
+
+Each query is clipped to the completed action, effective probe or suite
+freshness, and configured clock skew. Collection is limited to 15 seconds, five
+pages, 100 events, 4 KiB per message, 128 KiB of message text, and 32 normalized
+providers. Pagination, duplicate handling, provider ordering, observations, and
+failure categories are deterministic.
+
+Malformed, stale, future-dated, ambiguous, oversized, or partial data suppresses
+provider and canary positives. Normalized observations contain only bounded
+counts, booleans, sorted provider identifiers, and stable failure categories.
+Raw log messages, canary values, prompts, responses, documents, credentials,
+environment values, account IDs, principal ARNs, and SDK diagnostics are
+discarded. The adapter does not evaluate an assertion or decide compliance.
+
+A complete AWS suite runner and CloudTrail collection remain separate roadmap
+slices.
 
 ## Evidence runs
 

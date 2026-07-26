@@ -438,6 +438,39 @@ class CloudWatchLogsProbe(_BaseProbe):
         str,
         StringConstraints(strict=True, pattern=r"^[A-Za-z0-9_./#-]{1,512}$"),
     ]
+    canary: EnvironmentReference | None = None
+
+    @field_validator("observations")
+    @classmethod
+    def observations_are_cloudwatch_logs(
+        cls,
+        observations: tuple[ObservationKind, ...],
+    ) -> tuple[ObservationKind, ...]:
+        """Keep the built-in CloudWatch normalization surface fixed."""
+        supported = {
+            ObservationKind.PROVIDER_INVOCATION,
+            ObservationKind.TELEMETRY_CANARY,
+        }
+        if not set(observations) <= supported:
+            message = (
+                "cloudWatchLogs supports providerInvocation and telemetryCanary only"
+            )
+            raise ValueError(message)
+        return observations
+
+    @model_validator(mode="after")
+    def require_only_explicit_canary_reference(self) -> Self:
+        """Bind canary collection to one explicit environment reference."""
+        requests_canary = ObservationKind.TELEMETRY_CANARY in self.observations
+        if requests_canary and self.canary is None:
+            message = "cloudWatchLogs telemetryCanary requires a canary reference"
+            raise ValueError(message)
+        if not requests_canary and self.canary is not None:
+            message = (
+                "cloudWatchLogs canary is valid only when telemetryCanary is requested"
+            )
+            raise ValueError(message)
+        return self
 
 
 class CloudTrailProbe(_BaseProbe):
@@ -835,6 +868,33 @@ class VerificationSuite(_StrictModel):
                         f"{required.value} from probe {probe.id!r}"
                     )
                     raise ValueError(message)
+            return
+        self._validate_cloud_components(scenario)
+
+    @staticmethod
+    def _validate_cloud_components(scenario: Scenario) -> None:
+        probes_by_id = {probe.id: probe for probe in scenario.probes}
+        for assertion in scenario.assertions:
+            if not isinstance(assertion, TelemetryCanaryAssertion):
+                continue
+            probe = probes_by_id[assertion.probe_ref]
+            if not isinstance(probe, CloudWatchLogsProbe):
+                message = (
+                    f"telemetry canary assertion {assertion.id!r} requires "
+                    "a cloudWatchLogs probe"
+                )
+                raise ValueError(message)  # noqa: TRY004 - semantic validation.
+            if (
+                assertion.action_ref != probe.action_ref
+                or ObservationKind.TELEMETRY_CANARY not in probe.observations
+                or assertion.canary != probe.canary
+            ):
+                message = (
+                    f"telemetry canary assertion {assertion.id!r} must match "
+                    f"the action, observation, and canary declared by probe "
+                    f"{probe.id!r}"
+                )
+                raise ValueError(message)
 
     def render_resolved_redacted(self, environment: Mapping[str, str]) -> str:
         """Validate environment resolution and render only redacted JSON.

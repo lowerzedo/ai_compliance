@@ -33,6 +33,9 @@ _ROLE_ARN_PATTERN = re.compile(
     r"(?P<account>\d{12}):role/.+\Z"
 )
 _HEADER_PAIR_SIZE = 2
+_AWS_CONNECT_TIMEOUT_SECONDS = 3
+_AWS_READ_TIMEOUT_SECONDS = 5
+_AWS_MAX_ATTEMPTS = 2
 
 
 class AwsIdentityFailureCode(StrEnum):
@@ -71,6 +74,14 @@ class AwsStsClient(Protocol):
 
     def assume_role(self, **kwargs: str) -> Mapping[str, object]:
         """Return temporary credentials for one declared role."""
+        ...
+
+
+class _AwsCloudWatchLogsClient(Protocol):
+    """Exact read-only CloudWatch Logs surface used by the built-in probe."""
+
+    def filter_log_events(self, **kwargs: object) -> Mapping[str, object]:
+        """Return one bounded page from one declared log group."""
         ...
 
 
@@ -199,9 +210,9 @@ class _BotocoreAwsRequestModule(Protocol):
 class Boto3AwsSessionFactory:
     """Load the optional AWS SDK and apply conservative client bounds."""
 
-    connect_timeout_seconds: int = 3
-    read_timeout_seconds: int = 5
-    max_attempts: int = 2
+    connect_timeout_seconds: int = _AWS_CONNECT_TIMEOUT_SECONDS
+    read_timeout_seconds: int = _AWS_READ_TIMEOUT_SECONDS
+    max_attempts: int = _AWS_MAX_ATTEMPTS
 
     def create_current_session(
         self,
@@ -240,15 +251,10 @@ class Boto3AwsSessionFactory:
         region_name: str,
     ) -> AwsStsClient:
         """Create a regional STS client with bounded retries and timeouts."""
-        config_module = _botocore_config_module()
-        config = config_module.Config(
-            connect_timeout=self.connect_timeout_seconds,
-            ignore_configured_endpoint_urls=True,
-            read_timeout=self.read_timeout_seconds,
-            retries={
-                "mode": "standard",
-                "total_max_attempts": self.max_attempts,
-            },
+        config = _bounded_client_config(
+            connect_timeout_seconds=self.connect_timeout_seconds,
+            read_timeout_seconds=self.read_timeout_seconds,
+            max_attempts=self.max_attempts,
         )
         return cast(
             "AwsStsClient",
@@ -285,6 +291,43 @@ class AwsScopedIdentity:
     def matches_partition(self, expected_partition: str) -> bool:
         """Compare an expected partition without returning the observed ARN."""
         return self._partition == expected_partition
+
+    def _cloudwatch_logs_client(
+        self,
+        *,
+        region: str,
+        evaluated_at: datetime,
+    ) -> _AwsCloudWatchLogsClient:
+        """Create only the bounded CloudWatch Logs client needed by the probe."""
+        now = _normalized_datetime(evaluated_at)
+        expires_at = self._expires_at
+        if (
+            self.closed
+            or self._session is None
+            or (
+                expires_at is not None
+                and (
+                    expires_at.tzinfo is None
+                    or expires_at.utcoffset() is None
+                    or expires_at.astimezone(UTC) <= now
+                )
+            )
+        ):
+            message = "AWS identity lease cannot create a CloudWatch Logs client"
+            raise RuntimeError(message)
+        config = _bounded_client_config(
+            connect_timeout_seconds=_AWS_CONNECT_TIMEOUT_SECONDS,
+            read_timeout_seconds=_AWS_READ_TIMEOUT_SECONDS,
+            max_attempts=_AWS_MAX_ATTEMPTS,
+        )
+        return cast(
+            "_AwsCloudWatchLogsClient",
+            self._session.client(
+                "logs",
+                config=config,
+                region_name=region,
+            ),
+        )
 
     def _sign_request(  # noqa: PLR0913 - exact signing fields remain explicit.
         self,
@@ -628,6 +671,25 @@ def _botocore_config_module() -> _BotocoreConfigModule:
     return cast("_BotocoreConfigModule", module)
 
 
+def _bounded_client_config(
+    *,
+    connect_timeout_seconds: int,
+    read_timeout_seconds: int,
+    max_attempts: int,
+) -> object:
+    """Return one SDK configuration that ignores endpoint URL overrides."""
+    config_module = _botocore_config_module()
+    return config_module.Config(
+        connect_timeout=connect_timeout_seconds,
+        ignore_configured_endpoint_urls=True,
+        read_timeout=read_timeout_seconds,
+        retries={
+            "mode": "standard",
+            "total_max_attempts": max_attempts,
+        },
+    )
+
+
 def _botocore_auth_module() -> _BotocoreAuthModule:
     try:
         module = importlib.import_module("botocore.auth")
@@ -642,6 +704,17 @@ def _botocore_awsrequest_module() -> _BotocoreAwsRequestModule:
     except ModuleNotFoundError:
         raise _AwsSdkUnavailableError from None
     return cast("_BotocoreAwsRequestModule", module)
+
+
+def _normalized_datetime(value: object) -> datetime:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+    ):
+        message = "AWS identity evaluation time must include a UTC offset"
+        raise ValueError(message)
+    return value.astimezone(UTC)
 
 
 def _normalized_header_items(

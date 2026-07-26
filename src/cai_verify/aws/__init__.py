@@ -1,6 +1,13 @@
-"""Built-in AWS readiness checks and identity providers."""
+"""Built-in AWS identities, readiness checks, actions, and evidence probes."""
 
 from cai_verify.aws.action import AwsActionFailureCode, AwsSigV4ActionAdapter
+from cai_verify.aws.cloudwatch_logs import (
+    CLOUDWATCH_LOGS_ADAPTER_NAME,
+    CLOUDWATCH_LOGS_ADAPTER_VERSION,
+    CloudWatchLogsProbeAdapter,
+    CloudWatchLogsProbeError,
+    CloudWatchLogsProbeFailureCode,
+)
 from cai_verify.aws.doctor import (
     AWS_DOCTOR_SCHEMA_VERSION,
     AwsDoctorIssueCode,
@@ -22,6 +29,8 @@ from cai_verify.aws.identity import (
 
 __all__ = [
     "AWS_DOCTOR_SCHEMA_VERSION",
+    "CLOUDWATCH_LOGS_ADAPTER_NAME",
+    "CLOUDWATCH_LOGS_ADAPTER_VERSION",
     "AssumedRoleAwsIdentityProvider",
     "AwsActionFailureCode",
     "AwsDoctorIssueCode",
@@ -35,6 +44,9 @@ __all__ = [
     "AwsSigV4ActionAdapter",
     "AwsStsClient",
     "Boto3AwsSessionFactory",
+    "CloudWatchLogsProbeAdapter",
+    "CloudWatchLogsProbeError",
+    "CloudWatchLogsProbeFailureCode",
     "CurrentAwsIdentityProvider",
     "run_aws_doctor",
 ]

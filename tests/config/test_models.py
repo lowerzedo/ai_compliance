@@ -251,6 +251,55 @@ def test_invalid_probe_freshness_override_is_rejected() -> None:
     assert "no longer than PT24H" in _validation_message(data)
 
 
+def test_cloudwatch_canary_requires_only_an_environment_reference() -> None:
+    """Telemetry canary collection has one explicit secret-safe source."""
+    missing = _load_mapping()
+    missing["scenarios"][0]["probes"][0].pop("canary")
+    literal = _load_mapping()
+    literal["scenarios"][0]["probes"][0]["canary"] = (
+        "literal-canary-must-not-be-accepted"
+    )
+
+    assert "requires a canary reference" in _validation_message(missing)
+    assert "Input should be a valid dictionary" in _validation_message(literal)
+
+
+def test_cloudwatch_canary_probe_and_assertion_must_match() -> None:
+    """A canary assertion cannot silently describe another probe value."""
+    data = _load_mapping()
+    data["scenarios"][0]["probes"][0]["canary"]["name"] = "DIFFERENT_SYNTHETIC_CANARY"
+
+    assert "must match the action, observation, and canary" in _validation_message(
+        data,
+    )
+
+
+def test_cloudwatch_probe_rejects_unsupported_observation_kinds() -> None:
+    """The schema advertises only the two kinds implemented by this slice."""
+    data = _load_mapping()
+    data["scenarios"][0]["probes"][0]["observations"].append("auditEvent")
+
+    assert (
+        "supports providerInvocation and telemetryCanary only"
+        in _validation_message(data)
+    )
+
+
+def test_provider_only_cloudwatch_probe_does_not_require_a_canary() -> None:
+    """Provider normalization remains usable without a canary environment value."""
+    probe = CloudWatchLogsProbe.model_validate(
+        {
+            "actionRef": "signed-request",
+            "id": "provider-only",
+            "logGroup": "/aws/cai-verify/provider-only",
+            "observations": ["providerInvocation"],
+            "type": "cloudWatchLogs",
+        },
+    )
+
+    assert probe.canary is None
+
+
 def test_clock_skew_tolerance_is_bounded_separately() -> None:
     """Source clock tolerance cannot consume an evidence freshness window."""
     data = _load_mapping()
@@ -347,7 +396,7 @@ def test_resolved_configuration_renders_only_redacted_values() -> None:
     assert rendered == suite.render_resolved_redacted(
         dict(reversed(_ENVIRONMENT.items()))
     )
-    assert rendered.count("[REDACTED]") == len(_ENVIRONMENT)
+    assert rendered.count("[REDACTED]") == len(_ENVIRONMENT) + 1
     assert all(secret not in rendered for secret in _ENVIRONMENT.values())
     assert "SYNTHETIC_APP_TOKEN" in rendered
     assert "resolvedValue" in rendered

@@ -77,6 +77,9 @@ scenarios:
           - telemetryCanary
         maxAge: PT3M
         logGroup: /aws/cai-verify/synthetic-assistant
+        canary:
+          source: environment
+          name: SYNTHETIC_TELEMETRY_CANARY
       - id: cloud-audit
         type: cloudTrail
         identityRef: evidence-reader
