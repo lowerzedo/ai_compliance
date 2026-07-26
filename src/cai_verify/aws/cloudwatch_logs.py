@@ -18,7 +18,12 @@ from cai_verify.aws.identity import (
     _AwsSdkUnavailableError,
     _partition_for_region,
 )
-from cai_verify.config import CloudWatchLogsProbe, EnvironmentReference
+from cai_verify.config import (
+    BedrockInvocationDeclaration,
+    CloudWatchLogsProbe,
+    EnvironmentReference,
+    SafeModelAlias,
+)
 from cai_verify.config.models import ObservationKind
 from cai_verify.core import JsonValue, RedactedValue
 from cai_verify.plugins import (
@@ -35,24 +40,41 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 CLOUDWATCH_LOGS_ADAPTER_NAME = "aws-cloudwatch-logs"
-CLOUDWATCH_LOGS_ADAPTER_VERSION = "1.0.0"
+CLOUDWATCH_LOGS_ADAPTER_VERSION = "1.1.0"
 MAX_CLOUDWATCH_QUERY_SECONDS = 15.0
+MAX_CLOUDWATCH_QUERY_WINDOW = timedelta(minutes=10)
 MAX_CLOUDWATCH_PAGES = 5
 MAX_CLOUDWATCH_EVENTS = 100
 MAX_CLOUDWATCH_EVENT_BYTES = 4 * 1024
 MAX_CLOUDWATCH_TOTAL_BYTES = 128 * 1024
 MAX_CLOUDWATCH_PROVIDERS = 32
+MAX_CLOUDWATCH_BEDROCK_INVOCATIONS = 1
+MAX_CLOUDWATCH_MODEL_ALIASES = 1
+MAX_CLOUDWATCH_MODEL_ALIAS_BYTES = 64
+MAX_CLOUDWATCH_PAGINATION_TOKEN_LENGTH = 8 * 1024
+MAX_BEDROCK_MODEL_ID_BYTES = 2 * 1024
 
 _MAX_FRESHNESS = timedelta(hours=24)
 _MAX_CLOCK_SKEW = timedelta(minutes=5)
 _MAX_EVENT_ID_LENGTH = 512
-_MAX_PAGINATION_TOKEN_LENGTH = 8192
+_HTTP_OK = 200
 _SECONDS_PER_MINUTE = 60
 _STRUCTURED_LOG_VERSION = "1"
+_BEDROCK_PROVIDER = "Amazon Bedrock"
+_BEDROCK_INVOCATION_STATUS = "SUCCEEDED"
 _SUPPORTED_OBSERVATIONS = frozenset(
     {
+        ObservationKind.BEDROCK_INVOCATION,
         ObservationKind.PROVIDER_INVOCATION,
         ObservationKind.TELEMETRY_CANARY,
+    },
+)
+_PAGE_FIELDS = frozenset(
+    {
+        "ResponseMetadata",
+        "events",
+        "nextToken",
+        "searchedLogStreams",
     },
 )
 _EVENT_FIELDS = frozenset(
@@ -82,12 +104,30 @@ _CANARY_FIELDS = frozenset(
         "schemaVersion",
     },
 )
+_BEDROCK_FIELDS = frozenset(
+    {
+        "awsRegion",
+        "correlationId",
+        "eventKind",
+        "eventTime",
+        "invocationStatus",
+        "modelId",
+        "provider",
+        "schemaVersion",
+    },
+)
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}\Z")
 _LOG_GROUP_PATTERN = re.compile(r"[A-Za-z0-9_./#-]{1,512}\Z")
 _AWS_REGION_PATTERN = re.compile(r"[a-z]{2}(?:-gov)?-[a-z]+-\d\Z")
+_BEDROCK_MODEL_ID_PATTERN = re.compile(r"[A-Za-z0-9_./:-]{1,2048}\Z")
 _PROVIDER_PATTERN = re.compile(r"[a-z][a-z0-9.-]{0,63}\Z")
+_MODEL_ALIAS_PATTERN = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
 _SENSITIVE_PROVIDER_PATTERN = re.compile(
     r"(?:^|[.-])(?:account|arn|credential|password|secret|token)(?:[.-]|$)"
+    r"|\d{12}",
+)
+_SENSITIVE_ALIAS_PATTERN = re.compile(
+    r"(?:^|-)(?:account|arn|credential|password|secret|tenant|token)(?:-|$)"
     r"|\d{12}",
 )
 _EVENT_TIME_PATTERN = re.compile(
@@ -100,8 +140,10 @@ _FRESHNESS_PATTERN = re.compile(
 _LIMITATIONS = (
     "Collection is limited to one declared log group and a fixed synthetic "
     "application log schema.",
-    "Normalized evidence excludes raw messages, canary values, credentials, "
-    "account and principal identifiers, and SDK diagnostics.",
+    "Bedrock facts come from correlated post-invocation application telemetry; "
+    "the target application can still emit false telemetry.",
+    "Normalized evidence excludes raw messages, model identifiers, canary "
+    "values, credentials, account and principal identifiers, and SDK diagnostics.",
     "The probe reports bounded telemetry facts and does not decide compliance.",
 )
 
@@ -119,12 +161,17 @@ class CloudWatchLogsProbeFailureCode(StrEnum):
     IDENTITY_BOUNDARY_INVALID = "identity_boundary_invalid"
     INVALID_CONFIGURATION = "invalid_configuration"
     INVALID_EVENT = "invalid_event"
+    INVOCATION_LIMIT_EXCEEDED = "invocation_limit_exceeded"
     MISSING_CORRELATION = "missing_correlation"
+    MISSING_INVOCATION = "missing_invocation"
+    MODEL_MISMATCH = "model_mismatch"
     OVERSIZED_MESSAGE = "oversized_message"
     PAGINATION_LIMIT_EXCEEDED = "pagination_limit_exceeded"
     PARTIAL_RESPONSE = "partial_response"
+    PROVIDER_MISMATCH = "provider_mismatch"
     PROVIDER_LIMIT_EXCEEDED = "provider_limit_exceeded"
     QUERY_TIMEOUT = "query_timeout"
+    REGION_MISMATCH = "region_mismatch"
     SDK_ERROR = "sdk_error"
     SDK_TIMEOUT = "sdk_timeout"
     SDK_UNAVAILABLE = "aws_sdk_unavailable"
@@ -184,6 +231,16 @@ class _ParsedEvent:
     source_time: datetime
     provider: str | None = None
     canary_observed: bool = False
+    bedrock_provider_matched: bool = False
+    bedrock_region_matched: bool = False
+    bedrock_model_matched: bool = False
+    model_alias: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _BedrockExpectation:
+    model_id: bytes = field(repr=False)
+    model_alias: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,7 +286,7 @@ class CloudWatchLogsProbeAdapter:
             capabilities=("probe.aws-cloudwatch-logs",),
         )
 
-    def collect_evidence(  # noqa: C901, PLR0912 - fail-closed states are explicit.
+    def collect_evidence(  # noqa: C901, PLR0912, PLR0915
         self,
         request: ProbeRequest,
         /,
@@ -288,6 +345,9 @@ class CloudWatchLogsProbeAdapter:
         canary, canary_failure = self._canary(probe)
         if canary_failure is not None:
             failures.add(canary_failure)
+        bedrock, bedrock_failure = self._bedrock(probe)
+        if bedrock_failure is not None:
+            failures.add(bedrock_failure)
 
         region = target.aws_region
         if (
@@ -313,6 +373,18 @@ class CloudWatchLogsProbeAdapter:
             max_age=max_age,
             clock_skew_tolerance=self.clock_skew_tolerance,
         )
+        if window.end - window.start > MAX_CLOUDWATCH_QUERY_WINDOW:
+            return _probe_result(
+                probe,
+                collected_at=collected_at,
+                max_age=max_age,
+                collection=_Collection(
+                    failures=frozenset(
+                        {CloudWatchLogsProbeFailureCode.INVALID_CONFIGURATION},
+                    ),
+                ),
+            )
+        collection_started = self.monotonic()
         try:
             client = identity._cloudwatch_logs_client(  # noqa: SLF001
                 region=validated_region,
@@ -336,9 +408,12 @@ class CloudWatchLogsProbeAdapter:
                 probe=probe,
                 correlation_id=correlation_id,
                 canary=canary,
+                bedrock=bedrock,
+                expected_region=validated_region,
                 collected_at=collected_at,
                 max_age=max_age,
                 window=window,
+                collection_started=collection_started,
             )
         return _probe_result(
             probe,
@@ -347,7 +422,7 @@ class CloudWatchLogsProbeAdapter:
             collection=collection,
         )
 
-    def _canary(
+    def _canary(  # noqa: PLR0911 - fail-closed declaration states are explicit.
         self,
         probe: CloudWatchLogsProbe,
     ) -> tuple[str | None, CloudWatchLogsProbeFailureCode | None]:
@@ -362,29 +437,73 @@ class CloudWatchLogsProbeAdapter:
             value: object = self.environment[reference.name]
         except Exception:  # noqa: BLE001 - environment mappings are untrusted.
             return None, CloudWatchLogsProbeFailureCode.ENVIRONMENT_VALUE_INVALID
-        if (
-            not isinstance(value, str)
-            or not value
-            or len(value.encode("utf-8")) > MAX_CLOUDWATCH_EVENT_BYTES
-        ):
+        try:
+            value_bytes = value.encode("utf-8") if isinstance(value, str) else b""
+        except UnicodeEncodeError:
+            value_bytes = b""
+        if not isinstance(value, str) or not value or not value_bytes:
+            return None, CloudWatchLogsProbeFailureCode.ENVIRONMENT_VALUE_INVALID
+        if len(value_bytes) > MAX_CLOUDWATCH_EVENT_BYTES:
             return None, CloudWatchLogsProbeFailureCode.ENVIRONMENT_VALUE_INVALID
         return value, None
 
-    def _query(  # noqa: C901, PLR0912, PLR0913 - explicit query bounds.
+    def _bedrock(  # noqa: PLR0911 - fail-closed declaration states are explicit.
+        self,
+        probe: CloudWatchLogsProbe,
+    ) -> tuple[
+        _BedrockExpectation | None,
+        CloudWatchLogsProbeFailureCode | None,
+    ]:
+        if ObservationKind.BEDROCK_INVOCATION not in probe.observations:
+            if probe.bedrock is not None:
+                return None, CloudWatchLogsProbeFailureCode.INVALID_CONFIGURATION
+            return None, None
+        declaration = probe.bedrock
+        if not isinstance(declaration, BedrockInvocationDeclaration):
+            return None, CloudWatchLogsProbeFailureCode.INVALID_CONFIGURATION
+        reference = declaration.model_id
+        if not isinstance(reference, EnvironmentReference):
+            return None, CloudWatchLogsProbeFailureCode.INVALID_CONFIGURATION
+        try:
+            model_id: object = self.environment[reference.name]
+        except Exception:  # noqa: BLE001 - environment mappings are untrusted.
+            return None, CloudWatchLogsProbeFailureCode.ENVIRONMENT_VALUE_INVALID
+        model_id_bytes = _model_id_bytes(model_id)
+        if model_id_bytes is None:
+            return None, CloudWatchLogsProbeFailureCode.ENVIRONMENT_VALUE_INVALID
+        alias = declaration.model_alias
+        if alias is None:
+            model_alias = None
+        elif not _valid_model_alias(alias, model_id=model_id_bytes):
+            return None, CloudWatchLogsProbeFailureCode.INVALID_CONFIGURATION
+        else:
+            model_alias = alias.value
+        return (
+            _BedrockExpectation(
+                model_id=model_id_bytes,
+                model_alias=model_alias,
+            ),
+            None,
+        )
+
+    def _query(  # noqa: C901, PLR0912, PLR0913, PLR0915
         self,
         client: _AwsCloudWatchLogsClient,
         *,
         probe: CloudWatchLogsProbe,
         correlation_id: str,
         canary: str | None,
+        bedrock: _BedrockExpectation | None,
+        expected_region: str,
         collected_at: datetime,
         max_age: timedelta,
         window: _QueryWindow,
+        collection_started: float,
     ) -> _Collection:
-        query_started = self.monotonic()
         failures: set[CloudWatchLogsProbeFailureCode] = set()
         raw_events: list[_RawEvent] = []
         total_bytes = 0
+        events_examined = 0
         next_token: str | None = None
         seen_tokens: set[str] = set()
 
@@ -407,7 +526,7 @@ class CloudWatchLogsProbeAdapter:
                 failures.add(_sdk_failure(error))
                 failures.add(CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE)
                 break
-            if self.monotonic() - query_started > MAX_CLOUDWATCH_QUERY_SECONDS:
+            if self.monotonic() - collection_started > MAX_CLOUDWATCH_QUERY_SECONDS:
                 failures.update(
                     {
                         CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE,
@@ -418,6 +537,12 @@ class CloudWatchLogsProbeAdapter:
             page_events, page_token, page_failures = _validated_page(response)
             failures.update(page_failures)
             for raw_record in page_events:
+                events_examined += 1
+                if events_examined > MAX_CLOUDWATCH_EVENTS:
+                    failures.add(
+                        CloudWatchLogsProbeFailureCode.EVENT_LIMIT_EXCEEDED,
+                    )
+                    break
                 event, message_bytes, event_failures = _validated_event_record(
                     raw_record,
                 )
@@ -429,11 +554,6 @@ class CloudWatchLogsProbeAdapter:
                     )
                     break
                 if event is not None:
-                    if len(raw_events) >= MAX_CLOUDWATCH_EVENTS:
-                        failures.add(
-                            CloudWatchLogsProbeFailureCode.EVENT_LIMIT_EXCEEDED,
-                        )
-                        break
                     raw_events.append(event)
             if (
                 CloudWatchLogsProbeFailureCode.TOTAL_BYTES_EXCEEDED in failures
@@ -464,6 +584,8 @@ class CloudWatchLogsProbeAdapter:
             raw_events,
             correlation_id=correlation_id,
             canary=canary,
+            bedrock=bedrock,
+            expected_region=expected_region,
             requested=frozenset(probe.observations),
             collected_at=collected_at,
             max_age=max_age,
@@ -471,10 +593,31 @@ class CloudWatchLogsProbeAdapter:
             window=window,
         )
         failures.update(parse_failures)
+        bedrock_events = tuple(
+            event
+            for event in parsed
+            if event.kind is ObservationKind.BEDROCK_INVOCATION
+        )
+        if (
+            ObservationKind.BEDROCK_INVOCATION in probe.observations
+            and not bedrock_events
+            and not failures
+        ):
+            failures.add(CloudWatchLogsProbeFailureCode.MISSING_INVOCATION)
         providers = {event.provider for event in parsed if event.provider is not None}
         if len(providers) > MAX_CLOUDWATCH_PROVIDERS:
             failures.add(
                 CloudWatchLogsProbeFailureCode.PROVIDER_LIMIT_EXCEEDED,
+            )
+        if (
+            CloudWatchLogsProbeFailureCode.QUERY_TIMEOUT not in failures
+            and self.monotonic() - collection_started > MAX_CLOUDWATCH_QUERY_SECONDS
+        ):
+            failures.update(
+                {
+                    CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE,
+                    CloudWatchLogsProbeFailureCode.QUERY_TIMEOUT,
+                },
             )
         return _Collection(
             events=parsed,
@@ -506,7 +649,33 @@ def _probe_result(
             "partial": _partial(collection.failures),
             "stale": _stale(collection.failures),
         }
-        if kind is ObservationKind.PROVIDER_INVOCATION:
+        if kind is ObservationKind.BEDROCK_INVOCATION:
+            complete_invocation = collection.complete and len(relevant) == 1
+            event = relevant[0] if complete_invocation else None
+            observed = {
+                "accepted_correlated_invocations": (1 if complete_invocation else 0),
+                "ambiguous": _ambiguous(collection.failures),
+                "complete_correlated_bedrock_invocation_found": complete_invocation,
+                "declared_model_matched": (
+                    event.bedrock_model_matched if event is not None else False
+                ),
+                "error_category": failure.value if failure is not None else None,
+                "evidence_complete": complete_invocation,
+                "future_dated": _future_dated(collection.failures),
+                "malformed": _malformed(collection.failures),
+                "model_alias": event.model_alias if event is not None else None,
+                "oversized": _oversized(collection.failures),
+                "partial": _partial(collection.failures),
+                "provider_matched": (
+                    event.bedrock_provider_matched if event is not None else False
+                ),
+                "stale": _stale(collection.failures),
+                "target_region_matched": (
+                    event.bedrock_region_matched if event is not None else False
+                ),
+            }
+            suffix = "bedrock-invocation"
+        elif kind is ObservationKind.PROVIDER_INVOCATION:
             provider_names = sorted(
                 event.provider for event in relevant if event.provider is not None
             )
@@ -536,14 +705,16 @@ def _probe_result(
         ),
         freshness=EvidenceFreshness(
             collected_at=collected_at,
-            source_time=min(source_times) if source_times else None,
+            source_time=(
+                min(source_times) if source_times and collection.complete else None
+            ),
             max_age=max_age,
         ),
         observations=tuple(observations),
     )
 
 
-def _validated_page(
+def _validated_page(  # noqa: C901, PLR0912 - SDK page states are explicit.
     response: object,
 ) -> tuple[
     tuple[object, ...],
@@ -553,6 +724,8 @@ def _validated_page(
     failures: set[CloudWatchLogsProbeFailureCode] = set()
     if not isinstance(response, Mapping):
         return (), None, {CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE}
+    if not set(response) <= _PAGE_FIELDS:
+        failures.add(CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE)
     events = response.get("events")
     if not isinstance(events, list):
         failures.add(CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE)
@@ -573,15 +746,29 @@ def _validated_page(
                     failures.add(
                         CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE,
                     )
+    metadata = response.get("ResponseMetadata")
+    if metadata is not None and not isinstance(metadata, Mapping):
+        failures.add(CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE)
+    elif isinstance(metadata, Mapping):
+        status = metadata.get("HTTPStatusCode")
+        if status is not None and status != _HTTP_OK:
+            failures.add(CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE)
     token = response.get("nextToken")
     if token is None:
         next_token = None
     elif (
-        isinstance(token, str) and token and len(token) <= _MAX_PAGINATION_TOKEN_LENGTH
+        isinstance(token, str)
+        and token
+        and len(token) <= MAX_CLOUDWATCH_PAGINATION_TOKEN_LENGTH
     ):
         next_token = token
     else:
-        failures.add(CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE)
+        failures.update(
+            {
+                CloudWatchLogsProbeFailureCode.PAGINATION_LIMIT_EXCEEDED,
+                CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE,
+            },
+        )
         next_token = None
     return raw_events, next_token, failures
 
@@ -596,9 +783,12 @@ def _validated_event_record(  # noqa: PLR0911 - malformed states stay explicit.
     if not isinstance(value, Mapping):
         return None, 0, {CloudWatchLogsProbeFailureCode.INVALID_EVENT}
     message_value = value.get("message")
-    message_bytes = (
-        len(message_value.encode("utf-8")) if isinstance(message_value, str) else 0
-    )
+    try:
+        message_bytes = (
+            len(message_value.encode("utf-8")) if isinstance(message_value, str) else 0
+        )
+    except UnicodeEncodeError:
+        return None, 0, {CloudWatchLogsProbeFailureCode.INVALID_EVENT}
     if message_bytes > MAX_CLOUDWATCH_EVENT_BYTES:
         return (
             None,
@@ -666,6 +856,8 @@ def _normalize_events(  # noqa: PLR0913 - each validation boundary is explicit.
     *,
     correlation_id: str,
     canary: str | None,
+    bedrock: _BedrockExpectation | None,
+    expected_region: str,
     requested: frozenset[ObservationKind],
     collected_at: datetime,
     max_age: timedelta,
@@ -692,6 +884,7 @@ def _normalize_events(  # noqa: PLR0913 - each validation boundary is explicit.
             )
 
     parsed: list[_ParsedEvent] = []
+    accepted_bedrock_invocations = 0
     for event in sorted(
         (item for event_id, item in by_id.items() if event_id not in conflicting_ids),
         key=lambda item: (item.timestamp, item.event_id),
@@ -700,6 +893,8 @@ def _normalize_events(  # noqa: PLR0913 - each validation boundary is explicit.
             event,
             correlation_id=correlation_id,
             canary=canary,
+            bedrock=bedrock,
+            expected_region=expected_region,
             requested=requested,
             collected_at=collected_at,
             max_age=max_age,
@@ -708,6 +903,13 @@ def _normalize_events(  # noqa: PLR0913 - each validation boundary is explicit.
         )
         failures.update(event_failures)
         if normalized is not None:
+            if normalized.kind is ObservationKind.BEDROCK_INVOCATION:
+                if accepted_bedrock_invocations >= MAX_CLOUDWATCH_BEDROCK_INVOCATIONS:
+                    failures.add(
+                        CloudWatchLogsProbeFailureCode.INVOCATION_LIMIT_EXCEEDED,
+                    )
+                    continue
+                accepted_bedrock_invocations += 1
             parsed.append(normalized)
     return (
         tuple(
@@ -718,6 +920,7 @@ def _normalize_events(  # noqa: PLR0913 - each validation boundary is explicit.
                     item.source_time,
                     item.provider or "",
                     item.canary_observed,
+                    item.model_alias or "",
                 ),
             ),
         ),
@@ -730,6 +933,8 @@ def _parse_structured_event(  # noqa: C901, PLR0911, PLR0912, PLR0913
     *,
     correlation_id: str,
     canary: str | None,
+    bedrock: _BedrockExpectation | None,
+    expected_region: str,
     requested: frozenset[ObservationKind],
     collected_at: datetime,
     max_age: timedelta,
@@ -744,7 +949,9 @@ def _parse_structured_event(  # noqa: C901, PLR0911, PLR0912, PLR0913
         return None, {CloudWatchLogsProbeFailureCode.INVALID_EVENT}
     event_kind = decoded.get("eventKind")
     expected_fields = (
-        _PROVIDER_FIELDS
+        _BEDROCK_FIELDS
+        if event_kind == ObservationKind.BEDROCK_INVOCATION.value
+        else _PROVIDER_FIELDS
         if event_kind == ObservationKind.PROVIDER_INVOCATION.value
         else _CANARY_FIELDS
         if event_kind == ObservationKind.TELEMETRY_CANARY.value
@@ -780,6 +987,41 @@ def _parse_structured_event(  # noqa: C901, PLR0911, PLR0912, PLR0913
     kind = ObservationKind(cast("str", event_kind))
     if kind not in requested:
         return None, set()
+    if kind is ObservationKind.BEDROCK_INVOCATION:
+        if bedrock is None:
+            return None, {CloudWatchLogsProbeFailureCode.INVALID_EVENT}
+        provider = decoded.get("provider")
+        recorded_region = decoded.get("awsRegion")
+        recorded_model_id = _model_id_bytes(decoded.get("modelId"))
+        invocation_status = decoded.get("invocationStatus")
+        if (
+            not isinstance(provider, str)
+            or not isinstance(recorded_region, str)
+            or _AWS_REGION_PATTERN.fullmatch(recorded_region) is None
+            or recorded_model_id is None
+            or invocation_status != _BEDROCK_INVOCATION_STATUS
+        ):
+            return None, {CloudWatchLogsProbeFailureCode.INVALID_EVENT}
+        if provider != _BEDROCK_PROVIDER:
+            return None, {CloudWatchLogsProbeFailureCode.PROVIDER_MISMATCH}
+        if recorded_region != expected_region:
+            return None, {CloudWatchLogsProbeFailureCode.REGION_MISMATCH}
+        if not hmac.compare_digest(
+            recorded_model_id,
+            bedrock.model_id,
+        ):
+            return None, {CloudWatchLogsProbeFailureCode.MODEL_MISMATCH}
+        return (
+            _ParsedEvent(
+                kind=kind,
+                source_time=source_time,
+                bedrock_provider_matched=True,
+                bedrock_region_matched=True,
+                bedrock_model_matched=True,
+                model_alias=bedrock.model_alias,
+            ),
+            set(),
+        )
     if kind is ObservationKind.PROVIDER_INVOCATION:
         provider = decoded.get("providerId")
         if (
@@ -799,13 +1041,18 @@ def _parse_structured_event(  # noqa: C901, PLR0911, PLR0912, PLR0913
     observed_canary = decoded.get("canary")
     if not isinstance(observed_canary, str) or not observed_canary or canary is None:
         return None, {CloudWatchLogsProbeFailureCode.INVALID_EVENT}
+    try:
+        observed_canary_bytes = observed_canary.encode("utf-8")
+        canary_bytes = canary.encode("utf-8")
+    except UnicodeEncodeError:
+        return None, {CloudWatchLogsProbeFailureCode.INVALID_EVENT}
     return (
         _ParsedEvent(
             kind=kind,
             source_time=source_time,
             canary_observed=hmac.compare_digest(
-                observed_canary.encode("utf-8"),
-                canary.encode("utf-8"),
+                observed_canary_bytes,
+                canary_bytes,
             ),
         ),
         set(),
@@ -828,6 +1075,35 @@ def _query_window(
         collected_at + clock_skew_tolerance,
     )
     return _QueryWindow(start=start, end=max(start, end))
+
+
+def _model_id_bytes(value: object) -> bytes | None:
+    if not isinstance(value, str) or _BEDROCK_MODEL_ID_PATTERN.fullmatch(value) is None:
+        return None
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    return encoded if len(encoded) <= MAX_BEDROCK_MODEL_ID_BYTES else None
+
+
+def _valid_model_alias(alias: object, *, model_id: bytes) -> bool:
+    if (
+        not isinstance(alias, SafeModelAlias)
+        or alias.source != "literal"
+        or alias.sensitive is not False
+        or not isinstance(alias.value, str)
+        or _MODEL_ALIAS_PATTERN.fullmatch(alias.value) is None
+        or _SENSITIVE_ALIAS_PATTERN.search(alias.value) is not None
+    ):
+        return False
+    try:
+        encoded = alias.value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return len(encoded) <= MAX_CLOUDWATCH_MODEL_ALIAS_BYTES and not hmac.compare_digest(
+        encoded, model_id
+    )
 
 
 def _probe_max_age(
@@ -983,6 +1259,10 @@ def _ambiguous(failures: frozenset[CloudWatchLogsProbeFailureCode]) -> bool:
         & {
             CloudWatchLogsProbeFailureCode.AMBIGUOUS_CORRELATION,
             CloudWatchLogsProbeFailureCode.EVENT_OUTSIDE_WINDOW,
+            CloudWatchLogsProbeFailureCode.INVOCATION_LIMIT_EXCEEDED,
+            CloudWatchLogsProbeFailureCode.MODEL_MISMATCH,
+            CloudWatchLogsProbeFailureCode.PROVIDER_MISMATCH,
+            CloudWatchLogsProbeFailureCode.REGION_MISMATCH,
             CloudWatchLogsProbeFailureCode.TIMESTAMP_CONFLICT,
         },
     )
@@ -1023,11 +1303,15 @@ def _partial(failures: frozenset[CloudWatchLogsProbeFailureCode]) -> bool:
         failures
         & {
             CloudWatchLogsProbeFailureCode.ACCESS_DENIED,
+            CloudWatchLogsProbeFailureCode.EVENT_LIMIT_EXCEEDED,
+            CloudWatchLogsProbeFailureCode.INVOCATION_LIMIT_EXCEEDED,
             CloudWatchLogsProbeFailureCode.PAGINATION_LIMIT_EXCEEDED,
             CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE,
+            CloudWatchLogsProbeFailureCode.PROVIDER_LIMIT_EXCEEDED,
             CloudWatchLogsProbeFailureCode.QUERY_TIMEOUT,
             CloudWatchLogsProbeFailureCode.SDK_ERROR,
             CloudWatchLogsProbeFailureCode.SDK_TIMEOUT,
+            CloudWatchLogsProbeFailureCode.TOTAL_BYTES_EXCEEDED,
         },
     )
 

@@ -16,10 +16,12 @@ from cai_verify.config import (
     AuditEventPresentAssertion,
     AuditPrincipalCorrelatedAssertion,
     AwsSigV4Action,
+    BedrockInvocationDeclaration,
     CloudTrailProbe,
     CloudWatchLogsProbe,
     HttpAction,
     LocalTelemetryProbe,
+    SafeModelAlias,
     SyntheticLocalIdentity,
     TelemetryCanaryAbsentAssertion,
     VerificationSuite,
@@ -275,12 +277,12 @@ def test_cloudwatch_canary_probe_and_assertion_must_match() -> None:
 
 
 def test_cloudwatch_probe_rejects_unsupported_observation_kinds() -> None:
-    """The schema advertises only the two kinds implemented by this slice."""
+    """The schema advertises only the three fixed CloudWatch record kinds."""
     data = _load_mapping()
     data["scenarios"][0]["probes"][0]["observations"].append("auditEvent")
 
     assert (
-        "supports providerInvocation and telemetryCanary only"
+        "supports bedrockInvocation, providerInvocation, and telemetryCanary only"
         in _validation_message(data)
     )
 
@@ -298,6 +300,92 @@ def test_provider_only_cloudwatch_probe_does_not_require_a_canary() -> None:
     )
 
     assert probe.canary is None
+    assert probe.bedrock is None
+
+
+def test_bedrock_observation_requires_only_its_explicit_declaration() -> None:
+    """Bedrock model comparison is environment-backed and probe-owned."""
+    missing = _load_mapping()
+    probe = missing["scenarios"][0]["probes"][0]
+    probe["observations"].append("bedrockInvocation")
+    literal_model = deepcopy(missing)
+    literal_model["scenarios"][0]["probes"][0]["bedrock"] = {
+        "modelId": "synthetic.foundation-model-v1",
+    }
+    unrelated = _load_mapping()
+    unrelated["scenarios"][0]["probes"][0]["bedrock"] = {
+        "modelId": {
+            "name": "SYNTHETIC_BEDROCK_MODEL_ID",
+            "source": "environment",
+        },
+    }
+
+    assert "requires a bedrock declaration" in _validation_message(missing)
+    assert "Input should be a valid dictionary" in _validation_message(literal_model)
+    assert "valid only when bedrockInvocation is requested" in _validation_message(
+        unrelated
+    )
+
+
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "arn-tenant-model",
+        "account-primary",
+        "tenant-primary",
+        "model-111122223333",
+        "A-uppercase-alias",
+        "a" * 65,
+    ],
+)
+def test_bedrock_model_alias_is_explicitly_safe_and_bounded(alias: str) -> None:
+    """Obvious raw identifiers cannot use the optional normalized alias channel."""
+    data = _load_mapping()
+    probe = data["scenarios"][0]["probes"][0]
+    probe["observations"].append("bedrockInvocation")
+    probe["bedrock"] = {
+        "modelAlias": {
+            "sensitive": False,
+            "source": "literal",
+            "value": alias,
+        },
+        "modelId": {
+            "name": "SYNTHETIC_BEDROCK_MODEL_ID",
+            "source": "environment",
+        },
+    }
+
+    assert "modelAlias" in _validation_message(data)
+
+
+def test_bedrock_declaration_and_alias_are_strict_models() -> None:
+    """The public declaration has no expression or arbitrary mapping surface."""
+    declaration = BedrockInvocationDeclaration.model_validate(
+        {
+            "modelAlias": {
+                "sensitive": False,
+                "source": "literal",
+                "value": "synthetic-primary-model",
+            },
+            "modelId": {
+                "name": "SYNTHETIC_BEDROCK_MODEL_ID",
+                "source": "environment",
+            },
+        },
+    )
+
+    assert isinstance(declaration.model_alias, SafeModelAlias)
+    assert declaration.model_alias.value == "synthetic-primary-model"
+    with pytest.raises(ValidationError):
+        BedrockInvocationDeclaration.model_validate(
+            {
+                "modelId": {
+                    "expression": "$.request.modelId",
+                    "name": "SYNTHETIC_BEDROCK_MODEL_ID",
+                    "source": "environment",
+                },
+            },
+        )
 
 
 def test_clock_skew_tolerance_is_bounded_separately() -> None:

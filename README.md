@@ -7,11 +7,12 @@ producing machine-readable evidence.
 This repository contains core assertion-result semantics, the strict `1alpha1`
 verification-suite configuration models, a read-only AWS identity doctor, a
 built-in AWS SigV4 application action adapter, a bounded CloudWatch Logs
-evidence probe, a bounded CloudTrail audit probe, and one executable local
-vertical slice. The local slice calls a loopback synthetic AI application,
-probes its process-local telemetry, evaluates four deterministic assertions,
-renders terminal and JSON reports, and finalizes an unsigned tamper-evident
-evidence run. It does not establish HIPAA, FedRAMP, NIST, or legal compliance.
+evidence probe with Amazon Bedrock invocation normalization, a bounded
+CloudTrail audit probe, and one executable local vertical slice. The local
+slice calls a loopback synthetic AI application, probes its process-local
+telemetry, evaluates four deterministic assertions, renders terminal and JSON
+reports, and finalizes an unsigned tamper-evident evidence run. It does not
+establish HIPAA, FedRAMP, NIST, or legal compliance.
 
 The generated suite contract is committed at
 [`schemas/verification-suite-1alpha1.schema.json`](schemas/verification-suite-1alpha1.schema.json).
@@ -54,6 +55,9 @@ Compatibility notes for `1alpha1`:
   require an explicit schema compatibility decision.
 - A `cloudWatchLogs` probe requesting `telemetryCanary` must now declare a
   `canary` environment reference. Provider-only probes do not require it.
+- A `cloudWatchLogs` probe requesting `bedrockInvocation` must declare an
+  environment-backed Bedrock model ID and may declare one explicitly
+  non-sensitive bounded model alias.
 - The built-in loader accepts bounded duplicate-free JSON. General YAML parsing
   remains out of scope; PyYAML is test-only.
 
@@ -135,16 +139,26 @@ against the probe's exact `logGroup`. SDK endpoint URL overrides are ignored.
 The SDK uses three-second connection and five-second read timeouts with at most
 two attempts.
 
-This slice normalizes only `providerInvocation` and `telemetryCanary`. A canary
-probe must carry its own explicit environment reference:
+This slice normalizes only `bedrockInvocation`, `providerInvocation`, and
+`telemetryCanary`. A Bedrock observation carries its own opaque model
+comparison, and a canary probe carries its own explicit environment reference:
 
 ```yaml
 type: cloudWatchLogs
 actionRef: signed-request
 observations:
+  - bedrockInvocation
   - providerInvocation
   - telemetryCanary
 logGroup: /aws/cai-verify/synthetic-assistant
+bedrock:
+  modelId:
+    source: environment
+    name: SYNTHETIC_BEDROCK_MODEL_ID
+  modelAlias:
+    source: literal
+    value: synthetic-primary-model
+    sensitive: false
 canary:
   source: environment
   name: SYNTHETIC_TELEMETRY_CANARY
@@ -152,22 +166,38 @@ canary:
 
 Records use one fixed synthetic-application JSON format. Provider records
 contain exactly `schemaVersion`, `correlationId`, `eventTime`, `eventKind`, and
-`providerId`. Canary records replace `providerId` with `canary`. The adapter
-requires exactly one correlation ID from the completed action and compares
-canaries without returning their values.
+`providerId`. Canary records replace `providerId` with `canary`. A version `1`
+Bedrock record contains exactly `schemaVersion`, `correlationId`, `eventTime`,
+`eventKind`, `invocationStatus`, `provider`, `modelId`, and `awsRegion`. It is
+emitted only after a successful invocation; the provider must be exactly
+`Amazon Bedrock`, the status must be `SUCCEEDED`, and the recorded region must
+match the target. The adapter requires exactly one correlation ID from the
+completed action and compares canaries and model IDs without returning their
+values.
 
 Each query is clipped to the completed action, effective probe or suite
-freshness, and configured clock skew. Collection is limited to 15 seconds, five
-pages, 100 events, 4 KiB per message, 128 KiB of message text, and 32 normalized
-providers. Pagination, duplicate handling, provider ordering, observations, and
-failure categories are deterministic.
+freshness, and configured clock skew, with a ten-minute maximum window.
+Collection is limited to 15 seconds, five pages, 100 examined events, 4 KiB per
+message, 128 KiB of message text, one accepted Bedrock invocation, 32
+normalized provider identifiers, one 64-byte model alias, a 2 KiB internally
+compared model ID, and 8 KiB pagination tokens. The SDK asks for 101 events to
+detect an over-limit response. Pagination, duplicate handling, provider
+ordering, observations, and failure categories are deterministic.
 
 Malformed, stale, future-dated, ambiguous, oversized, or partial data suppresses
-provider and canary positives. Normalized observations contain only bounded
-counts, booleans, sorted provider identifiers, and stable failure categories.
-Raw log messages, canary values, prompts, responses, documents, credentials,
-environment values, account IDs, principal ARNs, and SDK diagnostics are
-discarded. The adapter does not evaluate an assertion or decide compliance.
+Bedrock, provider, and canary positives. Bedrock observations contain only a
+zero-or-one accepted count, provider/model/region match booleans, an optional
+explicitly non-sensitive alias, bounded state flags, and a stable failure
+category. Raw log messages, model IDs and ARNs, canary values, prompts,
+responses, documents, credentials, environment values, account IDs, principal
+ARNs, and SDK diagnostics are discarded.
+
+CloudWatch telemetry is independently meaningful relative to action
+configuration and SigV4 metadata because the fixed Bedrock record reports the
+model argument and region used by the instrumented application after the
+invocation. It is still application-reported evidence, so a compromised target
+can emit false telemetry. The adapter normalizes facts only; it does not add a
+Bedrock assertion evaluator or decide compliance.
 
 A complete AWS suite runner remains a separate roadmap slice.
 

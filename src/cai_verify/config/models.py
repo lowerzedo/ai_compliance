@@ -69,6 +69,10 @@ _SECRET_VALUE_PATTERNS = (
     re.compile(r"bearer\s+\S+", re.IGNORECASE),
     re.compile(r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"),
 )
+_SENSITIVE_ALIAS_PATTERN = re.compile(
+    r"(?:^|-)(?:account|arn|credential|password|secret|tenant|token)(?:-|$)"
+    r"|\d{12}",
+)
 
 type Identifier = Annotated[
     str,
@@ -126,6 +130,13 @@ type HeaderName = Annotated[
     StringConstraints(strict=True, pattern=_HEADER_NAME_PATTERN),
 ]
 type PositiveTimeout = Annotated[StrictInt, Field(ge=1, le=60)]
+type SafeModelAliasValue = Annotated[
+    str,
+    StringConstraints(
+        strict=True,
+        pattern=r"^[a-z][a-z0-9-]{0,63}$",
+    ),
+]
 
 
 def _to_camel(name: str) -> str:
@@ -171,6 +182,7 @@ class InputLocation(StrEnum):
 class ObservationKind(StrEnum):
     """Normalized observations that an alpha probe may request."""
 
+    BEDROCK_INVOCATION = "bedrockInvocation"
     PROVIDER_INVOCATION = "providerInvocation"
     TELEMETRY_CANARY = "telemetryCanary"
     AUDIT_EVENT = "auditEvent"
@@ -219,6 +231,30 @@ class LiteralInput(_StrictModel):
             message = "credential-shaped values must use an environment reference"
             raise ValueError(message)
         return value
+
+
+class SafeModelAlias(_StrictModel):
+    """An explicitly public bounded label for a sensitive Bedrock model ID."""
+
+    source: Literal["literal"]
+    value: SafeModelAliasValue
+    sensitive: Literal[False]
+
+    @field_validator("value")
+    @classmethod
+    def reject_identifier_shaped_aliases(cls, value: str) -> str:
+        """Reject obvious tenant and secret identifiers from normalized aliases."""
+        if _SENSITIVE_ALIAS_PATTERN.search(value) is not None:
+            message = "model alias must not contain sensitive identifier material"
+            raise ValueError(message)
+        return value
+
+
+class BedrockInvocationDeclaration(_StrictModel):
+    """Declare an opaque Bedrock model comparison and optional safe alias."""
+
+    model_id: EnvironmentReference
+    model_alias: SafeModelAlias | None = None
 
 
 type InputValue = Annotated[
@@ -439,6 +475,7 @@ class CloudWatchLogsProbe(_BaseProbe):
         StringConstraints(strict=True, pattern=r"^[A-Za-z0-9_./#-]{1,512}$"),
     ]
     canary: EnvironmentReference | None = None
+    bedrock: BedrockInvocationDeclaration | None = None
 
     @field_validator("observations")
     @classmethod
@@ -448,19 +485,21 @@ class CloudWatchLogsProbe(_BaseProbe):
     ) -> tuple[ObservationKind, ...]:
         """Keep the built-in CloudWatch normalization surface fixed."""
         supported = {
+            ObservationKind.BEDROCK_INVOCATION,
             ObservationKind.PROVIDER_INVOCATION,
             ObservationKind.TELEMETRY_CANARY,
         }
         if not set(observations) <= supported:
             message = (
-                "cloudWatchLogs supports providerInvocation and telemetryCanary only"
+                "cloudWatchLogs supports bedrockInvocation, providerInvocation, "
+                "and telemetryCanary only"
             )
             raise ValueError(message)
         return observations
 
     @model_validator(mode="after")
-    def require_only_explicit_canary_reference(self) -> Self:
-        """Bind canary collection to one explicit environment reference."""
+    def require_only_explicit_sensitive_references(self) -> Self:
+        """Bind sensitive comparisons to declarations owned by this probe."""
         requests_canary = ObservationKind.TELEMETRY_CANARY in self.observations
         if requests_canary and self.canary is None:
             message = "cloudWatchLogs telemetryCanary requires a canary reference"
@@ -468,6 +507,16 @@ class CloudWatchLogsProbe(_BaseProbe):
         if not requests_canary and self.canary is not None:
             message = (
                 "cloudWatchLogs canary is valid only when telemetryCanary is requested"
+            )
+            raise ValueError(message)
+        requests_bedrock = ObservationKind.BEDROCK_INVOCATION in self.observations
+        if requests_bedrock and self.bedrock is None:
+            message = "cloudWatchLogs bedrockInvocation requires a bedrock declaration"
+            raise ValueError(message)
+        if not requests_bedrock and self.bedrock is not None:
+            message = (
+                "cloudWatchLogs bedrock is valid only when bedrockInvocation "
+                "is requested"
             )
             raise ValueError(message)
         return self

@@ -412,6 +412,31 @@
       "title": "AwsSigV4Action",
       "type": "object"
     },
+    "BedrockInvocationDeclaration": {
+      "additionalProperties": false,
+      "description": "Declare an opaque Bedrock model comparison and optional safe alias.",
+      "properties": {
+        "modelAlias": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SafeModelAlias"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "modelId": {
+          "$ref": "#/$defs/EnvironmentReference"
+        }
+      },
+      "required": [
+        "modelId"
+      ],
+      "title": "BedrockInvocationDeclaration",
+      "type": "object"
+    },
     "CloudTrailProbe": {
       "additionalProperties": false,
       "description": "Collect normalized events from CloudTrail's fixed lookup surface.",
@@ -494,6 +519,17 @@
       "properties": {
         "actionRef": {
           "$ref": "#/$defs/Identifier"
+        },
+        "bedrock": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BedrockInvocationDeclaration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "canary": {
           "anyOf": [
@@ -1006,6 +1042,7 @@
     "ObservationKind": {
       "description": "Normalized observations that an alpha probe may request.",
       "enum": [
+        "bedrockInvocation",
         "providerInvocation",
         "telemetryCanary",
         "auditEvent",
@@ -1143,6 +1180,36 @@
       ],
       "title": "ReviewMetadata",
       "type": "object"
+    },
+    "SafeModelAlias": {
+      "additionalProperties": false,
+      "description": "An explicitly public bounded label for a sensitive Bedrock model ID.",
+      "properties": {
+        "sensitive": {
+          "const": false,
+          "title": "Sensitive",
+          "type": "boolean"
+        },
+        "source": {
+          "const": "literal",
+          "title": "Source",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/SafeModelAliasValue"
+        }
+      },
+      "required": [
+        "source",
+        "value",
+        "sensitive"
+      ],
+      "title": "SafeModelAlias",
+      "type": "object"
+    },
+    "SafeModelAliasValue": {
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "type": "string"
     },
     "Scenario": {
       "additionalProperties": false,
