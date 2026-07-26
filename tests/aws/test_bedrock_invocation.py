@@ -117,7 +117,7 @@ def test_correlated_bedrock_invocation_uses_exact_query_and_contract() -> None:
     result = assert_evidence_probe_contract(adapter, request)
 
     assert result.source.name == CLOUDWATCH_LOGS_ADAPTER_NAME
-    assert result.source.version == CLOUDWATCH_LOGS_ADAPTER_VERSION == "1.1.0"
+    assert result.source.version == CLOUDWATCH_LOGS_ADAPTER_VERSION == "1.2.0"
     assert result.freshness.collected_at == _COLLECTED_AT
     assert result.freshness.source_time == _ACTION_TIME
     assert _bedrock(result) == {

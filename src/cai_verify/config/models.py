@@ -184,6 +184,7 @@ class ObservationKind(StrEnum):
 
     BEDROCK_INVOCATION = "bedrockInvocation"
     PROVIDER_INVOCATION = "providerInvocation"
+    RETRIEVAL_CANARY = "retrievalCanary"
     TELEMETRY_CANARY = "telemetryCanary"
     AUDIT_EVENT = "auditEvent"
     ENCRYPTION_STATE = "encryptionState"
@@ -255,6 +256,13 @@ class BedrockInvocationDeclaration(_StrictModel):
 
     model_id: EnvironmentReference
     model_alias: SafeModelAlias | None = None
+
+
+class RetrievalCanaryDeclaration(_StrictModel):
+    """Declare paired opaque canaries for one fixed retrieval observation."""
+
+    baseline_canary: EnvironmentReference
+    boundary_canary: EnvironmentReference
 
 
 type InputValue = Annotated[
@@ -476,6 +484,7 @@ class CloudWatchLogsProbe(_BaseProbe):
     ]
     canary: EnvironmentReference | None = None
     bedrock: BedrockInvocationDeclaration | None = None
+    retrieval: RetrievalCanaryDeclaration | None = None
 
     @field_validator("observations")
     @classmethod
@@ -487,12 +496,13 @@ class CloudWatchLogsProbe(_BaseProbe):
         supported = {
             ObservationKind.BEDROCK_INVOCATION,
             ObservationKind.PROVIDER_INVOCATION,
+            ObservationKind.RETRIEVAL_CANARY,
             ObservationKind.TELEMETRY_CANARY,
         }
         if not set(observations) <= supported:
             message = (
                 "cloudWatchLogs supports bedrockInvocation, providerInvocation, "
-                "and telemetryCanary only"
+                "retrievalCanary, and telemetryCanary only"
             )
             raise ValueError(message)
         return observations
@@ -516,6 +526,16 @@ class CloudWatchLogsProbe(_BaseProbe):
         if not requests_bedrock and self.bedrock is not None:
             message = (
                 "cloudWatchLogs bedrock is valid only when bedrockInvocation "
+                "is requested"
+            )
+            raise ValueError(message)
+        requests_retrieval = ObservationKind.RETRIEVAL_CANARY in self.observations
+        if requests_retrieval and self.retrieval is None:
+            message = "cloudWatchLogs retrievalCanary requires a retrieval declaration"
+            raise ValueError(message)
+        if not requests_retrieval and self.retrieval is not None:
+            message = (
+                "cloudWatchLogs retrieval is valid only when retrievalCanary "
                 "is requested"
             )
             raise ValueError(message)

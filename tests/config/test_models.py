@@ -21,6 +21,7 @@ from cai_verify.config import (
     CloudWatchLogsProbe,
     HttpAction,
     LocalTelemetryProbe,
+    RetrievalCanaryDeclaration,
     SafeModelAlias,
     SyntheticLocalIdentity,
     TelemetryCanaryAbsentAssertion,
@@ -277,13 +278,13 @@ def test_cloudwatch_canary_probe_and_assertion_must_match() -> None:
 
 
 def test_cloudwatch_probe_rejects_unsupported_observation_kinds() -> None:
-    """The schema advertises only the three fixed CloudWatch record kinds."""
+    """The schema advertises only the four fixed CloudWatch record kinds."""
     data = _load_mapping()
     data["scenarios"][0]["probes"][0]["observations"].append("auditEvent")
 
     assert (
-        "supports bedrockInvocation, providerInvocation, and telemetryCanary only"
-        in _validation_message(data)
+        "supports bedrockInvocation, providerInvocation, retrievalCanary, "
+        "and telemetryCanary only" in _validation_message(data)
     )
 
 
@@ -384,6 +385,81 @@ def test_bedrock_declaration_and_alias_are_strict_models() -> None:
                     "name": "SYNTHETIC_BEDROCK_MODEL_ID",
                     "source": "environment",
                 },
+            },
+        )
+
+
+def test_retrieval_observation_requires_only_paired_environment_references() -> None:
+    """Retrieval canaries are probe-owned references with no literal channel."""
+    missing = _load_mapping()
+    probe = missing["scenarios"][0]["probes"][0]
+    probe["observations"].append("retrievalCanary")
+    bare = deepcopy(missing)
+    bare["scenarios"][0]["probes"][0]["retrieval"] = {
+        "baselineCanary": "synthetic-baseline-marker",
+        "boundaryCanary": "synthetic-boundary-marker",
+    }
+    literal = deepcopy(missing)
+    literal["scenarios"][0]["probes"][0]["retrieval"] = {
+        "baselineCanary": {
+            "sensitive": False,
+            "source": "literal",
+            "value": "synthetic-baseline-marker",
+        },
+        "boundaryCanary": {
+            "name": "SYNTHETIC_BOUNDARY_CANARY",
+            "source": "environment",
+        },
+    }
+    unrelated = _load_mapping()
+    unrelated["scenarios"][0]["probes"][0]["retrieval"] = {
+        "baselineCanary": {
+            "name": "SYNTHETIC_BASELINE_CANARY",
+            "source": "environment",
+        },
+        "boundaryCanary": {
+            "name": "SYNTHETIC_BOUNDARY_CANARY",
+            "source": "environment",
+        },
+    }
+
+    assert "requires a retrieval declaration" in _validation_message(missing)
+    assert "Input should be a valid dictionary" in _validation_message(bare)
+    assert "environment" in _validation_message(literal)
+    assert "valid only when retrievalCanary is requested" in _validation_message(
+        unrelated
+    )
+
+
+def test_retrieval_declaration_is_a_strict_fixed_model() -> None:
+    """The retrieval declaration has exactly two environment references."""
+    declaration = RetrievalCanaryDeclaration.model_validate(
+        {
+            "baselineCanary": {
+                "name": "SYNTHETIC_BASELINE_CANARY",
+                "source": "environment",
+            },
+            "boundaryCanary": {
+                "name": "SYNTHETIC_BOUNDARY_CANARY",
+                "source": "environment",
+            },
+        },
+    )
+
+    assert declaration.baseline_canary.name == "SYNTHETIC_BASELINE_CANARY"
+    assert declaration.boundary_canary.name == "SYNTHETIC_BOUNDARY_CANARY"
+    with pytest.raises(ValidationError):
+        RetrievalCanaryDeclaration.model_validate(
+            {
+                "baselineCanary": {
+                    "name": "SYNTHETIC_BASELINE_CANARY",
+                    "source": "environment",
+                },
+                "boundaryCanary": {
+                    "name": "SYNTHETIC_BOUNDARY_CANARY",
+                    "source": "environment",
+                },
+                "jsonPath": "$.context.canaries",
             },
         )
 

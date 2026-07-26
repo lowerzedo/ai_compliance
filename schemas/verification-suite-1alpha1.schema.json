@@ -580,6 +580,17 @@
           "title": "Observations",
           "type": "array"
         },
+        "retrieval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetrievalCanaryDeclaration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "type": {
           "const": "cloudWatchLogs",
           "title": "Type",
@@ -1044,6 +1055,7 @@
       "enum": [
         "bedrockInvocation",
         "providerInvocation",
+        "retrievalCanary",
         "telemetryCanary",
         "auditEvent",
         "encryptionState"
@@ -1160,6 +1172,24 @@
       ],
       "title": "ResponsibleParty",
       "type": "string"
+    },
+    "RetrievalCanaryDeclaration": {
+      "additionalProperties": false,
+      "description": "Declare paired opaque canaries for one fixed retrieval observation.",
+      "properties": {
+        "baselineCanary": {
+          "$ref": "#/$defs/EnvironmentReference"
+        },
+        "boundaryCanary": {
+          "$ref": "#/$defs/EnvironmentReference"
+        }
+      },
+      "required": [
+        "baselineCanary",
+        "boundaryCanary"
+      ],
+      "title": "RetrievalCanaryDeclaration",
+      "type": "object"
     },
     "ReviewMetadata": {
       "additionalProperties": false,
