@@ -11,13 +11,13 @@ from typer.testing import CliRunner
 
 import cai_verify.adapters.http as http_adapter
 from cai_verify.cli import app
+from cai_verify.config import load_suite
 from cai_verify.core import AssertionStatus, CliExitCode
 from cai_verify.evidence import IntegrityIssueCode, verify_run_integrity
 from cai_verify.local import SyntheticTelemetryMode
 from cai_verify.local.runner import (
     SYNTHETIC_CANARY,
     LocalRunOptions,
-    load_suite,
     run_local_suite,
 )
 

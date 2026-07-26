@@ -7,7 +7,6 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING, final
 
 from cai_verify.adapters import HttpActionAdapter
@@ -25,6 +24,9 @@ from cai_verify.config import (
     Target,
     TelemetryCanaryAbsentAssertion,
     VerificationSuite,
+)
+from cai_verify.config import (
+    load_suite as _load_suite,
 )
 from cai_verify.config.models import DeploymentEnvironment
 from cai_verify.core import (
@@ -55,15 +57,20 @@ from cai_verify.reporters import JsonReporter, TerminalReporter
 if TYPE_CHECKING:
     import os
     from collections.abc import Mapping
+    from pathlib import Path
 
     from cai_verify.config import Assertion, Scenario
 
 SYNTHETIC_CANARY = "CAI-SYNTHETIC-CANARY-001"
 DETERMINISTIC_TIME = datetime(2026, 7, 22, 12, tzinfo=UTC)
-_MAX_SUITE_BYTES = 1024 * 1024
 _FRESHNESS_PATTERN = re.compile(
     r"PT(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?\Z",
 )
+
+
+def load_suite(path: str | os.PathLike[str]) -> VerificationSuite:
+    """Load a suite through the generic bounded loader."""
+    return _load_suite(path)
 
 
 @final
@@ -90,22 +97,6 @@ class LocalRunOptions:
     run_id: str
     environment: Mapping[str, str] | None = None
     evaluated_at: datetime = DETERMINISTIC_TIME
-
-
-def load_suite(path: str | os.PathLike[str]) -> VerificationSuite:
-    """Load one bounded, duplicate-free JSON suite through the strict model."""
-    suite_path = Path(path)
-    with suite_path.open("rb") as stream:
-        content = stream.read(_MAX_SUITE_BYTES + 1)
-    if len(content) > _MAX_SUITE_BYTES:
-        message = "verification suite exceeds the maximum supported size"
-        raise ValueError(message)
-    try:
-        decoded = json.loads(content, object_pairs_hook=_unique_object)
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
-        message = "verification suite must be duplicate-free UTF-8 JSON"
-        raise ValueError(message) from error
-    return VerificationSuite.model_validate(decoded)
 
 
 def run_local_suite(
@@ -482,13 +473,3 @@ def _json_bytes(value: object) -> bytes:
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
-
-
-def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    value: dict[str, object] = {}
-    for key, item in pairs:
-        if key in value:
-            message = "verification suite contains a duplicate object field"
-            raise ValueError(message)
-        value[key] = item
-    return value

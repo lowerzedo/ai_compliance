@@ -11,13 +11,14 @@ from cai_verify.assertions import (
     AuditPrincipalCorrelatedEvaluator,
     TelemetryCanaryAbsentEvaluator,
 )
+from cai_verify.config import load_suite
 from cai_verify.core import (
     AssertionStatus,
     CliExitCode,
     RedactedValue,
     exit_code_for_results,
 )
-from cai_verify.local.runner import DETERMINISTIC_TIME, load_suite
+from cai_verify.local.runner import DETERMINISTIC_TIME
 from cai_verify.plugins import (
     ActionExecutionResult,
     ActionOutcome,

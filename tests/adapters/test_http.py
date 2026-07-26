@@ -9,9 +9,15 @@ import pytest
 
 import cai_verify.adapters.http as http_adapter
 from cai_verify.adapters import HttpActionAdapter
-from cai_verify.config import ActionInput, HttpAction, SyntheticLocalIdentity, Target
+from cai_verify.config import (
+    ActionInput,
+    HttpAction,
+    SyntheticLocalIdentity,
+    Target,
+    load_suite,
+)
 from cai_verify.local import SyntheticScopedIdentity
-from cai_verify.local.runner import DETERMINISTIC_TIME, load_suite
+from cai_verify.local.runner import DETERMINISTIC_TIME
 from cai_verify.plugins import ActionOutcome, ActionRequest, ExecutionContext
 
 if TYPE_CHECKING:

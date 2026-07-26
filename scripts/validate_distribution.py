@@ -69,7 +69,27 @@ def main() -> None:
         )
         raise RuntimeError(message)
 
-    sys.stdout.write(f"Wheel CLI smoke test passed: cai-verify {expected_version}\n")
+    doctor_help = subprocess.run(  # noqa: S603
+        [*command[:-1], "doctor", "aws", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+    )
+    if doctor_help.returncode != 0:
+        message = (
+            "base wheel could not load AWS doctor help without the optional SDK:\n"
+            f"{doctor_help.stderr.strip()}"
+        )
+        raise RuntimeError(message)
+    if "read-only STS" not in doctor_help.stdout:
+        message = "AWS doctor help did not describe its read-only boundary"
+        raise RuntimeError(message)
+
+    sys.stdout.write(
+        "Wheel CLI smoke tests passed: "
+        f"cai-verify {expected_version}, AWS doctor help\n"
+    )
 
 
 if __name__ == "__main__":

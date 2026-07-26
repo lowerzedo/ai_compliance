@@ -102,6 +102,7 @@ def test_local_components_cannot_be_mixed_with_cloud_targets() -> None:
     loaded = json.loads(_LOCAL_SUITE.read_bytes())
     loaded["target"].update(
         {
+            "awsAccountId": "111122223333",
             "awsRegion": "eu-west-2",
             "endpoint": "https://example.test",
             "environment": "sandbox",
@@ -112,6 +113,14 @@ def test_local_components_cannot_be_mixed_with_cloud_targets() -> None:
     message = _validation_message(cast("SuiteMapping", loaded))
 
     assert "syntheticLocal identities require a local target" in message
+
+
+def test_cloud_target_requires_an_explicit_account_boundary() -> None:
+    """Cloud execution cannot proceed without an expected AWS account."""
+    data = _load_mapping()
+    data["target"].pop("awsAccountId")
+
+    assert "must declare awsRegion and awsAccountId" in _validation_message(data)
 
 
 @pytest.mark.parametrize(

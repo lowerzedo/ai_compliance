@@ -1,6 +1,7 @@
 """Command-line interface for Cloud AI Control Verifier."""
 
 import json
+import os
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
@@ -8,11 +9,13 @@ from typing import Annotated
 import typer
 
 from cai_verify import __version__
+from cai_verify.aws import run_aws_doctor
+from cai_verify.config import load_suite
+from cai_verify.core import CliExitCode
 from cai_verify.evidence import verify_run_integrity
 from cai_verify.local import SyntheticTelemetryMode  # noqa: TC001 - Typer runtime.
 from cai_verify.local.runner import (
     LocalRunOptions,
-    load_suite,
     run_local_suite,
 )
 
@@ -21,6 +24,11 @@ app = typer.Typer(
     help="Verify security controls for cloud-hosted AI systems.",
     no_args_is_help=True,
 )
+doctor_app = typer.Typer(
+    help="Check runtime prerequisites without executing verification actions.",
+    no_args_is_help=True,
+)
+app.add_typer(doctor_app, name="doctor")
 
 
 class ReportFormat(StrEnum):
@@ -39,6 +47,37 @@ def main() -> None:
 def version() -> None:
     """Print the installed cai-verify version."""
     typer.echo(__version__)
+
+
+@doctor_app.command("aws")
+def doctor_aws(
+    suite_path: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+        ),
+    ],
+    report: Annotated[ReportFormat, typer.Option("--report")] = ReportFormat.TERMINAL,
+) -> None:
+    """Check declared AWS identities with read-only STS calls."""
+    try:
+        suite = load_suite(suite_path)
+        result = run_aws_doctor(suite, environment=os.environ)
+    except Exception:  # noqa: BLE001 - public diagnostics must remain redacted.
+        typer.echo("AWS doctor failed", err=True)
+        raise typer.Exit(code=int(CliExitCode.EXECUTION_ERROR)) from None
+    content = (
+        result.to_json_bytes()
+        if report is ReportFormat.JSON
+        else result.to_terminal_bytes()
+    )
+    typer.echo(content.decode(), nl=False)
+    if not result.ready:
+        raise typer.Exit(code=int(CliExitCode.EXECUTION_ERROR))
 
 
 @app.command("run-local")

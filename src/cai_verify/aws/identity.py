@@ -1,0 +1,508 @@
+"""Read-only AWS identity providers with redacted failure boundaries."""
+
+from __future__ import annotations
+
+import importlib
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING, Protocol, cast, final
+
+from cai_verify.config import (
+    AssumedRoleIdentity,
+    CurrentAwsIdentity,
+    EnvironmentReference,
+)
+from cai_verify.plugins import (
+    PLUGIN_API_VERSION,
+    IdentityRequest,
+    PluginMetadata,
+)
+
+if TYPE_CHECKING:
+    from cai_verify.config import Identity, Target
+
+_CALLER_ARN_PATTERN = re.compile(
+    r"arn:(?P<partition>aws|aws-us-gov|aws-cn):(?:iam|sts)::"
+    r"(?P<account>\d{12}):.+\Z"
+)
+_ROLE_ARN_PATTERN = re.compile(
+    r"arn:(?P<partition>aws|aws-us-gov|aws-cn):iam::"
+    r"(?P<account>\d{12}):role/.+\Z"
+)
+
+
+class AwsIdentityFailureCode(StrEnum):
+    """Stable, non-secret categories for identity acquisition failures."""
+
+    ACQUISITION_FAILED = "identity_acquisition_failed"
+    ENVIRONMENT_VALUE_INVALID = "environment_value_invalid"
+    INVALID_RESPONSE = "invalid_aws_response"
+    SDK_UNAVAILABLE = "aws_sdk_unavailable"
+
+
+class AwsIdentityError(RuntimeError):
+    """An AWS identity failure whose public text excludes SDK diagnostics."""
+
+    def __init__(self, code: AwsIdentityFailureCode, identity_id: str) -> None:
+        """Create an error from validated non-secret identity metadata."""
+        self.code = code
+        message = f"AWS identity {identity_id!r} is unavailable ({code.value})"
+        super().__init__(message)
+
+
+class _AwsSdkUnavailableError(RuntimeError):
+    """The optional AWS SDK is not installed or cannot be imported."""
+
+
+class _InvalidAwsResponseError(ValueError):
+    """An AWS response did not contain the normalized fields we require."""
+
+
+class AwsStsClient(Protocol):
+    """Narrow STS surface used by the built-in identity providers."""
+
+    def get_caller_identity(self) -> Mapping[str, object]:
+        """Return the caller identity response."""
+        ...
+
+    def assume_role(self, **kwargs: str) -> Mapping[str, object]:
+        """Return temporary credentials for one declared role."""
+        ...
+
+
+class AwsSession(Protocol):
+    """Opaque SDK session retained only for the lifetime of an identity lease."""
+
+    def client(self, service_name: str, **kwargs: object) -> object:
+        """Create a service client from the session's scoped credentials."""
+        ...
+
+
+class AwsSessionFactory(Protocol):
+    """Construct bounded SDK sessions and STS clients."""
+
+    def create_current_session(
+        self,
+        *,
+        profile_name: str | None,
+        region_name: str,
+    ) -> AwsSession:
+        """Create a session from the normal AWS credential provider chain."""
+        ...
+
+    def create_assumed_session(
+        self,
+        *,
+        access_key_id: str,
+        secret_access_key: str,
+        session_token: str,
+        region_name: str,
+    ) -> AwsSession:
+        """Create a session from temporary AssumeRole credentials."""
+        ...
+
+    def create_sts_client(
+        self,
+        session: AwsSession,
+        *,
+        region_name: str,
+    ) -> AwsStsClient:
+        """Create an STS client with bounded retry and timeout policy."""
+        ...
+
+
+class _Boto3Module(Protocol):
+    def Session(self, **kwargs: object) -> AwsSession:  # noqa: N802
+        """Construct a boto3 session."""
+        ...
+
+
+class _BotocoreConfigModule(Protocol):
+    def Config(self, **kwargs: object) -> object:  # noqa: N802
+        """Construct a botocore client configuration."""
+        ...
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class Boto3AwsSessionFactory:
+    """Load the optional AWS SDK and apply conservative client bounds."""
+
+    connect_timeout_seconds: int = 3
+    read_timeout_seconds: int = 5
+    max_attempts: int = 2
+
+    def create_current_session(
+        self,
+        *,
+        profile_name: str | None,
+        region_name: str,
+    ) -> AwsSession:
+        """Create a boto3 session without accepting literal credentials."""
+        boto3 = _boto3_module()
+        arguments: dict[str, object] = {"region_name": region_name}
+        if profile_name is not None:
+            arguments["profile_name"] = profile_name
+        return boto3.Session(**arguments)
+
+    def create_assumed_session(
+        self,
+        *,
+        access_key_id: str,
+        secret_access_key: str,
+        session_token: str,
+        region_name: str,
+    ) -> AwsSession:
+        """Create a boto3 session from one in-memory temporary lease."""
+        boto3 = _boto3_module()
+        return boto3.Session(
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=secret_access_key,
+            aws_session_token=session_token,
+            region_name=region_name,
+        )
+
+    def create_sts_client(
+        self,
+        session: AwsSession,
+        *,
+        region_name: str,
+    ) -> AwsStsClient:
+        """Create a regional STS client with bounded retries and timeouts."""
+        config_module = _botocore_config_module()
+        config = config_module.Config(
+            connect_timeout=self.connect_timeout_seconds,
+            ignore_configured_endpoint_urls=True,
+            read_timeout=self.read_timeout_seconds,
+            retries={
+                "mode": "standard",
+                "total_max_attempts": self.max_attempts,
+            },
+        )
+        return cast(
+            "AwsStsClient",
+            session.client("sts", config=config, region_name=region_name),
+        )
+
+
+@final
+@dataclass(slots=True)
+class AwsScopedIdentity:
+    """Hold an opaque AWS SDK session and normalized non-secret lease metadata."""
+
+    _identity_id: str
+    _account_id: str | None = field(repr=False)
+    _partition: str | None = field(repr=False)
+    _expires_at: datetime | None
+    _session: AwsSession | None = field(repr=False)
+    closed: bool = False
+
+    @property
+    def identity_id(self) -> str:
+        """Return the configured identity identifier."""
+        return self._identity_id
+
+    @property
+    def expires_at(self) -> datetime | None:
+        """Return the SDK-supplied expiry when one is available."""
+        return self._expires_at
+
+    def matches_account(self, expected_account_id: str) -> bool:
+        """Compare an expected account without returning the observed account."""
+        return self._account_id == expected_account_id
+
+    def matches_partition(self, expected_partition: str) -> bool:
+        """Compare an expected partition without returning the observed ARN."""
+        return self._partition == expected_partition
+
+    def close(self) -> None:
+        """Release references to the SDK session and normalized principal data."""
+        self._session = None
+        self._account_id = None
+        self._partition = None
+        self.closed = True
+
+
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CurrentAwsIdentityProvider:
+    """Acquire an identity through the normal AWS credential provider chain."""
+
+    environment: Mapping[str, str] = field(repr=False)
+    session_factory: AwsSessionFactory = field(
+        default_factory=Boto3AwsSessionFactory,
+        repr=False,
+    )
+
+    @property
+    def metadata(self) -> PluginMetadata:
+        """Declare the built-in current-identity capability."""
+        return PluginMetadata(
+            name="aws-current-identity",
+            api_version=PLUGIN_API_VERSION,
+            capabilities=("identity.aws-current",),
+        )
+
+    def provide_identity(self, request: IdentityRequest, /) -> AwsScopedIdentity:
+        """Resolve a current AWS identity and validate it with read-only STS."""
+        identity = request.identity
+        if not isinstance(identity, CurrentAwsIdentity):
+            message = "current AWS provider requires an awsCurrent identity"
+            raise TypeError(message)
+        region = _target_region(request.context.target, identity.id)
+        try:
+            profile_name = _optional_environment_value(
+                identity.profile,
+                self.environment,
+                identity_id=identity.id,
+            )
+            session = self.session_factory.create_current_session(
+                profile_name=profile_name,
+                region_name=region,
+            )
+            return _validated_lease(
+                identity_id=identity.id,
+                session=session,
+                session_factory=self.session_factory,
+                region=region,
+                expires_at=None,
+            )
+        except AwsIdentityError:
+            raise
+        except _AwsSdkUnavailableError:
+            raise AwsIdentityError(
+                AwsIdentityFailureCode.SDK_UNAVAILABLE,
+                identity.id,
+            ) from None
+        except _InvalidAwsResponseError:
+            raise AwsIdentityError(
+                AwsIdentityFailureCode.INVALID_RESPONSE,
+                identity.id,
+            ) from None
+        except Exception:  # noqa: BLE001 - SDK and credential errors are redacted.
+            raise AwsIdentityError(
+                AwsIdentityFailureCode.ACQUISITION_FAILED,
+                identity.id,
+            ) from None
+
+
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AssumedRoleAwsIdentityProvider:
+    """Acquire one explicitly declared AWS role through read-only STS calls."""
+
+    environment: Mapping[str, str] = field(repr=False)
+    session_factory: AwsSessionFactory = field(
+        default_factory=Boto3AwsSessionFactory,
+        repr=False,
+    )
+
+    @property
+    def metadata(self) -> PluginMetadata:
+        """Declare the built-in AssumeRole capability."""
+        return PluginMetadata(
+            name="aws-assumed-role-identity",
+            api_version=PLUGIN_API_VERSION,
+            capabilities=("identity.aws-assume-role",),
+        )
+
+    def provide_identity(self, request: IdentityRequest, /) -> AwsScopedIdentity:
+        """Assume a declared role and validate the resulting principal with STS."""
+        identity = request.identity
+        if not isinstance(identity, AssumedRoleIdentity):
+            message = "assumed-role provider requires an awsAssumeRole identity"
+            raise TypeError(message)
+        region = _target_region(request.context.target, identity.id)
+        try:
+            base_session = self.session_factory.create_current_session(
+                profile_name=None,
+                region_name=region,
+            )
+            base_sts = self.session_factory.create_sts_client(
+                base_session,
+                region_name=region,
+            )
+            arguments = {
+                "RoleArn": identity.role_arn,
+                "RoleSessionName": identity.session_name,
+            }
+            external_id = _optional_environment_value(
+                identity.external_id,
+                self.environment,
+                identity_id=identity.id,
+            )
+            if external_id is not None:
+                arguments["ExternalId"] = external_id
+            response = base_sts.assume_role(**arguments)
+            access_key, secret_key, session_token, expires_at = _temporary_credentials(
+                response
+            )
+            assumed_session = self.session_factory.create_assumed_session(
+                access_key_id=access_key,
+                secret_access_key=secret_key,
+                session_token=session_token,
+                region_name=region,
+            )
+            return _validated_lease(
+                identity_id=identity.id,
+                session=assumed_session,
+                session_factory=self.session_factory,
+                region=region,
+                expires_at=expires_at,
+            )
+        except AwsIdentityError:
+            raise
+        except _AwsSdkUnavailableError:
+            raise AwsIdentityError(
+                AwsIdentityFailureCode.SDK_UNAVAILABLE,
+                identity.id,
+            ) from None
+        except _InvalidAwsResponseError:
+            raise AwsIdentityError(
+                AwsIdentityFailureCode.INVALID_RESPONSE,
+                identity.id,
+            ) from None
+        except Exception:  # noqa: BLE001 - SDK and credential errors are redacted.
+            raise AwsIdentityError(
+                AwsIdentityFailureCode.ACQUISITION_FAILED,
+                identity.id,
+            ) from None
+
+
+def _validated_lease(
+    *,
+    identity_id: str,
+    session: AwsSession,
+    session_factory: AwsSessionFactory,
+    region: str,
+    expires_at: datetime | None,
+) -> AwsScopedIdentity:
+    sts = session_factory.create_sts_client(session, region_name=region)
+    account_id, partition = _caller_identity(sts.get_caller_identity())
+    return AwsScopedIdentity(
+        _identity_id=identity_id,
+        _account_id=account_id,
+        _partition=partition,
+        _expires_at=expires_at,
+        _session=session,
+    )
+
+
+def _caller_identity(response: Mapping[str, object]) -> tuple[str, str]:
+    account_id = response.get("Account")
+    arn = response.get("Arn")
+    if not isinstance(account_id, str) or not isinstance(arn, str):
+        raise _InvalidAwsResponseError
+    match = _CALLER_ARN_PATTERN.fullmatch(arn)
+    if match is None or match.group("account") != account_id:
+        raise _InvalidAwsResponseError
+    return account_id, match.group("partition")
+
+
+def _temporary_credentials(
+    response: Mapping[str, object],
+) -> tuple[str, str, str, datetime]:
+    credentials = response.get("Credentials")
+    if not isinstance(credentials, Mapping):
+        raise _InvalidAwsResponseError
+    access_key = credentials.get("AccessKeyId")
+    secret_key = credentials.get("SecretAccessKey")
+    session_token = credentials.get("SessionToken")
+    expires_at = credentials.get("Expiration")
+    if (
+        not isinstance(access_key, str)
+        or not access_key
+        or not isinstance(secret_key, str)
+        or not secret_key
+        or not isinstance(session_token, str)
+        or not session_token
+        or not isinstance(expires_at, datetime)
+        or expires_at.tzinfo is None
+        or expires_at.utcoffset() is None
+    ):
+        raise _InvalidAwsResponseError
+    return (
+        access_key,
+        secret_key,
+        session_token,
+        expires_at.astimezone(UTC),
+    )
+
+
+def _optional_environment_value(
+    reference: EnvironmentReference | None,
+    environment: Mapping[str, str],
+    *,
+    identity_id: str,
+) -> str | None:
+    if reference is None:
+        return None
+    try:
+        value: object = environment[reference.name]
+    except Exception:  # noqa: BLE001 - environment mappings are untrusted.
+        raise AwsIdentityError(
+            AwsIdentityFailureCode.ENVIRONMENT_VALUE_INVALID,
+            identity_id,
+        ) from None
+    if not isinstance(value, str) or not value:
+        raise AwsIdentityError(
+            AwsIdentityFailureCode.ENVIRONMENT_VALUE_INVALID,
+            identity_id,
+        )
+    return value
+
+
+def _target_region(target: Target, identity_id: str) -> str:
+    if target.aws_region is None:
+        raise AwsIdentityError(
+            AwsIdentityFailureCode.ACQUISITION_FAILED,
+            identity_id,
+        )
+    return target.aws_region
+
+
+def _expected_account(identity: Identity, target: Target) -> str | None:
+    """Return the explicit account boundary for one declared identity."""
+    if isinstance(identity, AssumedRoleIdentity):
+        match = _ROLE_ARN_PATTERN.fullmatch(identity.role_arn)
+        return match.group("account") if match is not None else None
+    if isinstance(identity, CurrentAwsIdentity):
+        return target.aws_account_id
+    return None
+
+
+def _expected_partition(identity: Identity, target: Target) -> str | None:
+    """Return the explicit partition boundary for one declared identity."""
+    if isinstance(identity, AssumedRoleIdentity):
+        match = _ROLE_ARN_PATTERN.fullmatch(identity.role_arn)
+        return match.group("partition") if match is not None else None
+    if isinstance(identity, CurrentAwsIdentity) and target.aws_region is not None:
+        return _partition_for_region(target.aws_region)
+    return None
+
+
+def _partition_for_region(region: str) -> str:
+    if region.startswith("us-gov-"):
+        return "aws-us-gov"
+    if region.startswith("cn-"):
+        return "aws-cn"
+    return "aws"
+
+
+def _boto3_module() -> _Boto3Module:
+    try:
+        module = importlib.import_module("boto3")
+    except ModuleNotFoundError:
+        raise _AwsSdkUnavailableError from None
+    return cast("_Boto3Module", module)
+
+
+def _botocore_config_module() -> _BotocoreConfigModule:
+    try:
+        module = importlib.import_module("botocore.config")
+    except ModuleNotFoundError:
+        raise _AwsSdkUnavailableError from None
+    return cast("_BotocoreConfigModule", module)

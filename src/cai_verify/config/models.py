@@ -298,8 +298,8 @@ class Target(_StrictModel):
             if self.aws_region is not None or self.aws_account_id is not None:
                 message = "local targets must not declare AWS deployment fields"
                 raise ValueError(message)
-        elif self.aws_region is None:
-            message = "non-local targets must declare awsRegion"
+        elif self.aws_region is None or self.aws_account_id is None:
+            message = "non-local targets must declare awsRegion and awsAccountId"
             raise ValueError(message)
         return self
 
