@@ -44,6 +44,7 @@ include = [
   "/README.md",
   "/examples",
   "/pyproject.toml",
+  "/schemas",
   "/src/cai_verify",
 ]
 

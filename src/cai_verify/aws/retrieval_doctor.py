@@ -21,6 +21,10 @@ from cai_verify.aws.cloudwatch_logs import (
     _model_id_bytes,
     _valid_model_alias,
 )
+from cai_verify.aws.execution_policy import (
+    AwsExecutionPolicy,
+    authorize_aws_execution,
+)
 from cai_verify.aws.identity import (
     AssumedRoleAwsIdentityProvider,
     AwsIdentityError,
@@ -298,9 +302,10 @@ class _SourceState:
     issue: RetrievalDoctorIssueCode | None
 
 
-def run_retrieval_doctor(  # noqa: C901, PLR0912, PLR0915
+def run_retrieval_doctor(  # noqa: C901, PLR0912, PLR0913, PLR0915
     suite: VerificationSuite,
     *,
+    execution_policy: AwsExecutionPolicy,
     environment: Mapping[str, str],
     session_factory: AwsSessionFactory | None = None,
     clock: Callable[[], datetime] | None = None,
@@ -384,6 +389,27 @@ def run_retrieval_doctor(  # noqa: C901, PLR0912, PLR0915
             issues=top_issues,
         )
 
+    authorize_aws_execution(
+        execution_policy,
+        target=suite.target,
+        identities=(
+            identity
+            for identity_id in sorted(relevant_identity_ids)
+            if isinstance(
+                (identity := identities_by_id.get(identity_id)),
+                CurrentAwsIdentity | AssumedRoleIdentity,
+            )
+        ),
+        actions=(
+            chain.action
+            for chain in chains
+            if chain.configuration_compatible
+            and isinstance(chain.action, AwsSigV4Action)
+        ),
+        cloudwatch_log_groups=(
+            source_key[2] for source_key in sorted(eligible_source_keys)
+        ),
+    )
     factory = session_factory or Boto3AwsSessionFactory()
     leases: dict[str, AwsScopedIdentity] = {}
     identity_states: dict[str, _IdentityState] = {}
@@ -912,11 +938,7 @@ def _acquire_identity(  # noqa: PLR0911
                 session_factory=session_factory,
             ).provide_identity(request)
     except AwsIdentityError as error:
-        issue = (
-            RetrievalDoctorIssueCode.SDK_UNAVAILABLE
-            if error.code.value == RetrievalDoctorIssueCode.SDK_UNAVAILABLE.value
-            else RetrievalDoctorIssueCode.IDENTITY_ACQUISITION_FAILED
-        )
+        issue = RetrievalDoctorIssueCode(error.code.value)
         return None, _IdentityState(ready=False, issue=issue)
     except Exception:  # noqa: BLE001 - provider diagnostics are discarded.
         return (

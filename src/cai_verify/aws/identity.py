@@ -32,6 +32,12 @@ _ROLE_ARN_PATTERN = re.compile(
     r"arn:(?P<partition>aws|aws-us-gov|aws-cn):iam::"
     r"(?P<account>\d{12}):role/.+\Z"
 )
+_ASSUMED_ROLE_CALLER_ARN_PATTERN = re.compile(
+    r"arn:(?P<partition>aws|aws-us-gov|aws-cn):sts::"
+    r"(?P<account>\d{12}):assumed-role/"
+    r"(?P<role_name>[\w+=,.@-]{1,64})/"
+    r"(?P<session_name>[\w+=,.@-]{2,64})\Z"
+)
 _HEADER_PAIR_SIZE = 2
 _AWS_CONNECT_TIMEOUT_SECONDS = 3
 _AWS_READ_TIMEOUT_SECONDS = 5
@@ -41,9 +47,11 @@ _AWS_MAX_ATTEMPTS = 2
 class AwsIdentityFailureCode(StrEnum):
     """Stable, non-secret categories for identity acquisition failures."""
 
+    ACCOUNT_MISMATCH = "account_mismatch"
     ACQUISITION_FAILED = "identity_acquisition_failed"
     ENVIRONMENT_VALUE_INVALID = "environment_value_invalid"
     INVALID_RESPONSE = "invalid_aws_response"
+    PARTITION_MISMATCH = "partition_mismatch"
     SDK_UNAVAILABLE = "aws_sdk_unavailable"
 
 
@@ -560,6 +568,8 @@ class AssumedRoleAwsIdentityProvider:
                 session_factory=self.session_factory,
                 region=region,
                 expires_at=expires_at,
+                expected_assumed_role_arn=identity.role_arn,
+                expected_session_name=identity.session_name,
             )
         except AwsIdentityError:
             raise
@@ -580,16 +590,28 @@ class AssumedRoleAwsIdentityProvider:
             ) from None
 
 
-def _validated_lease(
+def _validated_lease(  # noqa: PLR0913 - role binding inputs stay explicit.
     *,
     identity_id: str,
     session: AwsSession,
     session_factory: AwsSessionFactory,
     region: str,
     expires_at: datetime | None,
+    expected_assumed_role_arn: str | None = None,
+    expected_session_name: str | None = None,
 ) -> AwsScopedIdentity:
     sts = session_factory.create_sts_client(session, region_name=region)
-    account_id, partition = _caller_identity(sts.get_caller_identity())
+    account_id, partition, caller_arn = _caller_identity(sts.get_caller_identity())
+    if expected_assumed_role_arn is not None or expected_session_name is not None:
+        if expected_assumed_role_arn is None or expected_session_name is None:
+            raise _InvalidAwsResponseError
+        binding_failure = _assumed_role_binding_failure(
+            caller_arn,
+            role_arn=expected_assumed_role_arn,
+            session_name=expected_session_name,
+        )
+        if binding_failure is not None:
+            raise AwsIdentityError(binding_failure, identity_id)
     return AwsScopedIdentity(
         _identity_id=identity_id,
         _account_id=account_id,
@@ -599,7 +621,7 @@ def _validated_lease(
     )
 
 
-def _caller_identity(response: Mapping[str, object]) -> tuple[str, str]:
+def _caller_identity(response: Mapping[str, object]) -> tuple[str, str, str]:
     account_id = response.get("Account")
     arn = response.get("Arn")
     if not isinstance(account_id, str) or not isinstance(arn, str):
@@ -607,7 +629,31 @@ def _caller_identity(response: Mapping[str, object]) -> tuple[str, str]:
     match = _CALLER_ARN_PATTERN.fullmatch(arn)
     if match is None or match.group("account") != account_id:
         raise _InvalidAwsResponseError
-    return account_id, match.group("partition")
+    return account_id, match.group("partition"), arn
+
+
+def _assumed_role_binding_failure(
+    caller_arn: str,
+    *,
+    role_arn: str,
+    session_name: str,
+) -> AwsIdentityFailureCode | None:
+    """Bind an STS principal to the exact declared role and session."""
+    role_match = _ROLE_ARN_PATTERN.fullmatch(role_arn)
+    caller_match = _ASSUMED_ROLE_CALLER_ARN_PATTERN.fullmatch(caller_arn)
+    if role_match is None or caller_match is None:
+        return AwsIdentityFailureCode.INVALID_RESPONSE
+    role_name = role_arn.rsplit("/", maxsplit=1)[-1]
+    if (
+        caller_match.group("role_name") != role_name
+        or caller_match.group("session_name") != session_name
+    ):
+        return AwsIdentityFailureCode.INVALID_RESPONSE
+    if caller_match.group("partition") != role_match.group("partition"):
+        return AwsIdentityFailureCode.PARTITION_MISMATCH
+    if caller_match.group("account") != role_match.group("account"):
+        return AwsIdentityFailureCode.ACCOUNT_MISMATCH
+    return None
 
 
 def _temporary_credentials(

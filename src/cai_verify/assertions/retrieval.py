@@ -86,7 +86,7 @@ _EXPECTED: JsonValue = {
     "retrieval_succeeded": True,
     "undeclared_synthetic_marker_observed": False,
 }
-_FIXED_LIMITATIONS = (
+RETRIEVAL_BOUNDARY_FIXED_LIMITATIONS = (
     "The test uses synthetic paired canaries.",
     "The retrieval evidence is application-reported.",
     "A compromised or incorrectly instrumented application can report false facts.",
@@ -636,7 +636,7 @@ def _result(  # noqa: PLR0913 - mirrors the immutable result contract.
 ) -> AssertionResult:
     limitations = {
         *(item.description for item in assertion.limitations),
-        *_FIXED_LIMITATIONS,
+        *RETRIEVAL_BOUNDARY_FIXED_LIMITATIONS,
     }
     return AssertionResult(
         assertion_id=assertion.id,

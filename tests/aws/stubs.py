@@ -99,6 +99,7 @@ def add_caller_identity(
     *,
     account_id: str = "111122223333",
     partition: str = "aws",
+    service: str = "iam",
     resource: str = "user/synthetic-doctor",
 ) -> None:
     """Queue a synthetic GetCallerIdentity response."""
@@ -106,7 +107,7 @@ def add_caller_identity(
         "get_caller_identity",
         {
             "Account": account_id,
-            "Arn": f"arn:{partition}:iam::{account_id}:{resource}",
+            "Arn": f"arn:{partition}:{service}::{account_id}:{resource}",
             "UserId": "SYNTHETICUSERID",
         },
         {},

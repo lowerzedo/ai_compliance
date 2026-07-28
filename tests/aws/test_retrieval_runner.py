@@ -26,6 +26,7 @@ from cai_verify.aws import (
 from cai_verify.aws.action import _AwsHttpRequest, _AwsHttpResponse
 from cai_verify.config import VerificationSuite
 from cai_verify.core import AssertionStatus, CliExitCode
+from tests.aws.policy import authorizing_execution_policy
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -115,18 +116,22 @@ class _LogsClient:
 @dataclass(slots=True)
 class _StsClient:
     expires_at: datetime = _NOW + timedelta(hours=1)
+    role_parameters: list[dict[str, str]] = field(default_factory=list)
 
     def get_caller_identity(self) -> Mapping[str, object]:
+        parameters = self.role_parameters[-1]
+        role_name = parameters["RoleArn"].rsplit("/", maxsplit=1)[-1]
+        session_name = parameters["RoleSessionName"]
         return {
             "Account": _ACCOUNT_ID,
             "Arn": (
-                f"arn:aws:sts::{_ACCOUNT_ID}:assumed-role/synthetic/synthetic-session"
+                f"arn:aws:sts::{_ACCOUNT_ID}:assumed-role/{role_name}/{session_name}"
             ),
             "UserId": "SYNTHETIC",
         }
 
     def assume_role(self, **kwargs: str) -> Mapping[str, object]:
-        del kwargs
+        self.role_parameters.append(kwargs)
         return {
             "Credentials": {
                 "AccessKeyId": "synthetic-access-key",
@@ -223,6 +228,7 @@ def test_runner_executes_one_preseeded_chain_and_closes_both_leases(
         AwsRetrievalRunOptions(
             run_id="synthetic-aws-retrieval-run",
             assertion_id="requester-a-retrieval-boundary",
+            execution_policy=authorizing_execution_policy(suite),
             environment=_ENVIRONMENT,
             session_factory=cast("AwsSessionFactory", factory),
             clock=lambda: _NOW,
@@ -263,6 +269,7 @@ def test_runner_rejects_equal_canaries_before_identity_or_application_work() -> 
             AwsRetrievalRunOptions(
                 run_id="synthetic-aws-retrieval-run",
                 assertion_id="requester-a-retrieval-boundary",
+                execution_policy=authorizing_execution_policy(_suite()),
                 environment={
                     "SYNTHETIC_REQUESTER_A_CANARY": "same",
                     "SYNTHETIC_REQUESTER_B_CANARY": "same",
@@ -303,6 +310,7 @@ def test_runner_closes_an_expired_evidence_lease_on_validation_failure(
             AwsRetrievalRunOptions(
                 run_id="synthetic-aws-retrieval-run",
                 assertion_id="requester-a-retrieval-boundary",
+                execution_policy=authorizing_execution_policy(_suite()),
                 environment=_ENVIRONMENT,
                 session_factory=cast("AwsSessionFactory", factory),
                 clock=lambda: _NOW,

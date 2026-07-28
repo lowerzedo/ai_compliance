@@ -19,7 +19,10 @@ from cai_verify.aws import (
     AwsStsClient,
     RetrievalCorrelationState,
     RetrievalDoctorIssueCode,
-    run_retrieval_doctor,
+    RetrievalDoctorResult,
+)
+from cai_verify.aws import (
+    run_retrieval_doctor as _run_retrieval_doctor,
 )
 from cai_verify.aws.retrieval_doctor import (
     MAX_RETRIEVAL_RETURNED_TEXT_BYTES,
@@ -33,6 +36,7 @@ from cai_verify.config import (
     HttpAction,
     VerificationSuite,
 )
+from tests.aws.policy import authorizing_execution_policy
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -67,6 +71,18 @@ _EXPECTED_FILTER = {
 }
 
 
+def run_retrieval_doctor(
+    suite: VerificationSuite,
+    **kwargs: Any,  # noqa: ANN401 - preserve the production call surface in tests.
+) -> RetrievalDoctorResult:
+    """Exercise readiness through an independently supplied exact test policy."""
+    return _run_retrieval_doctor(
+        suite,
+        execution_policy=authorizing_execution_policy(suite),
+        **kwargs,
+    )
+
+
 @dataclass(slots=True)
 class _LogsClient:
     response: object = field(
@@ -93,11 +109,14 @@ class _StsClient:
     role_parameters: list[dict[str, str]] = field(default_factory=list)
 
     def get_caller_identity(self) -> Mapping[str, object]:
+        parameters = self.role_parameters[-1]
+        role_name = parameters["RoleArn"].rsplit("/", maxsplit=1)[-1]
+        session_name = parameters["RoleSessionName"]
         return {
             "Account": self.account_id,
             "Arn": (
                 f"arn:{self.partition}:sts::{self.account_id}:"
-                "assumed-role/synthetic/synthetic"
+                f"assumed-role/{role_name}/{session_name}"
             ),
             "UserId": "SYNTHETIC",
         }
@@ -281,7 +300,9 @@ def test_reciprocal_contract_uses_stubbed_sts_and_one_filter_request(
                 "Account": _ACCOUNT_ID,
                 "Arn": (
                     f"arn:aws:sts::{_ACCOUNT_ID}:"
-                    f"assumed-role/synthetic/{identity.session_name}"
+                    "assumed-role/"
+                    f"{identity.role_arn.rsplit('/', maxsplit=1)[-1]}/"
+                    f"{identity.session_name}"
                 ),
                 "UserId": f"SYNTHETIC:{identity.session_name}",
             },

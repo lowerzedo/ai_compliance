@@ -22,6 +22,18 @@ from cai_verify.aws.doctor import (
     AwsIdentityCheck,
     run_aws_doctor,
 )
+from cai_verify.aws.execution_policy import (
+    AWS_EXECUTION_POLICY_SCHEMA_ID,
+    AWS_EXECUTION_POLICY_SCHEMA_VERSION,
+    MAX_AWS_EXECUTION_POLICY_BYTES,
+    AwsExecutionPolicy,
+    AwsExecutionPolicyAction,
+    AwsExecutionPolicyError,
+    AwsExecutionPolicyFailureCode,
+    authorize_aws_execution,
+    aws_execution_policy_json_schema,
+    load_aws_execution_policy,
+)
 from cai_verify.aws.identity import (
     AssumedRoleAwsIdentityProvider,
     AwsIdentityError,
@@ -32,6 +44,14 @@ from cai_verify.aws.identity import (
     AwsStsClient,
     Boto3AwsSessionFactory,
     CurrentAwsIdentityProvider,
+)
+from cai_verify.aws.reciprocal_retrieval_runner import (
+    MAX_AWS_RECIPROCAL_ORCHESTRATION_SECONDS,
+    AwsReciprocalRetrievalRunError,
+    AwsReciprocalRetrievalRunFailureCode,
+    AwsReciprocalRetrievalRunOptions,
+    AwsReciprocalRetrievalRunResult,
+    run_aws_reciprocal_retrieval,
 )
 from cai_verify.aws.retrieval_doctor import (
     MAX_RETRIEVAL_ASSERTIONS,
@@ -56,10 +76,14 @@ from cai_verify.aws.retrieval_runner import (
 
 __all__ = [
     "AWS_DOCTOR_SCHEMA_VERSION",
+    "AWS_EXECUTION_POLICY_SCHEMA_ID",
+    "AWS_EXECUTION_POLICY_SCHEMA_VERSION",
     "CLOUDTRAIL_ADAPTER_NAME",
     "CLOUDTRAIL_ADAPTER_VERSION",
     "CLOUDWATCH_LOGS_ADAPTER_NAME",
     "CLOUDWATCH_LOGS_ADAPTER_VERSION",
+    "MAX_AWS_EXECUTION_POLICY_BYTES",
+    "MAX_AWS_RECIPROCAL_ORCHESTRATION_SECONDS",
     "MAX_RETRIEVAL_ASSERTIONS",
     "MAX_RETRIEVAL_DOCTOR_SECONDS",
     "MAX_RETRIEVAL_FINDINGS",
@@ -70,9 +94,17 @@ __all__ = [
     "AwsActionFailureCode",
     "AwsDoctorIssueCode",
     "AwsDoctorResult",
+    "AwsExecutionPolicy",
+    "AwsExecutionPolicyAction",
+    "AwsExecutionPolicyError",
+    "AwsExecutionPolicyFailureCode",
     "AwsIdentityCheck",
     "AwsIdentityError",
     "AwsIdentityFailureCode",
+    "AwsReciprocalRetrievalRunError",
+    "AwsReciprocalRetrievalRunFailureCode",
+    "AwsReciprocalRetrievalRunOptions",
+    "AwsReciprocalRetrievalRunResult",
     "AwsRetrievalRunError",
     "AwsRetrievalRunFailureCode",
     "AwsRetrievalRunOptions",
@@ -94,7 +126,11 @@ __all__ = [
     "RetrievalDoctorIssueCode",
     "RetrievalDoctorResult",
     "RetrievalReadinessCheck",
+    "authorize_aws_execution",
+    "aws_execution_policy_json_schema",
+    "load_aws_execution_policy",
     "run_aws_doctor",
+    "run_aws_reciprocal_retrieval",
     "run_aws_retrieval_chain",
     "run_retrieval_doctor",
 ]

@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 from cai_verify import __version__
 from cai_verify.aws import (
     AwsDoctorResult,
+    AwsExecutionPolicy,
     AwsIdentityCheck,
     AwsRetrievalRunResult,
     RetrievalCorrelationState,
@@ -73,17 +74,30 @@ def test_nested_aws_doctor_command_renders_canonical_json(
     def successful_doctor(
         _suite: VerificationSuite,
         *,
+        execution_policy: AwsExecutionPolicy,
         environment: Mapping[str, str],
     ) -> AwsDoctorResult:
+        assert execution_policy is not None
         assert environment is not None
         return doctor_result
 
     monkeypatch.setattr("cai_verify.cli.run_aws_doctor", successful_doctor)
     suite_path = Path(__file__).parents[1] / "examples/local/synthetic-suite.json"
+    policy_path = (
+        Path(__file__).parents[1] / "examples/aws/reciprocal-retrieval-policy.json"
+    )
 
     result = runner.invoke(
         app,
-        ["doctor", "aws", str(suite_path), "--report", "json"],
+        [
+            "doctor",
+            "aws",
+            str(suite_path),
+            "--execution-policy",
+            str(policy_path),
+            "--report",
+            "json",
+        ],
     )
 
     assert result.exit_code == 0
@@ -99,15 +113,28 @@ def test_aws_doctor_failure_redacts_exception_details(
     def fail_doctor(
         _suite: VerificationSuite,
         *,
+        execution_policy: AwsExecutionPolicy,
         environment: Mapping[str, str],
     ) -> AwsDoctorResult:
-        del environment
+        del environment, execution_policy
         raise RuntimeError(secret)
 
     monkeypatch.setattr("cai_verify.cli.run_aws_doctor", fail_doctor)
     suite_path = Path(__file__).parents[1] / "examples/local/synthetic-suite.json"
+    policy_path = (
+        Path(__file__).parents[1] / "examples/aws/reciprocal-retrieval-policy.json"
+    )
 
-    result = runner.invoke(app, ["doctor", "aws", str(suite_path)])
+    result = runner.invoke(
+        app,
+        [
+            "doctor",
+            "aws",
+            str(suite_path),
+            "--execution-policy",
+            str(policy_path),
+        ],
+    )
 
     assert result.exit_code == int(CliExitCode.EXECUTION_ERROR)
     assert result.stdout == ""
@@ -145,17 +172,30 @@ def test_retrieval_doctor_command_renders_canonical_json(
     def successful_doctor(
         _suite: VerificationSuite,
         *,
+        execution_policy: AwsExecutionPolicy,
         environment: Mapping[str, str],
     ) -> RetrievalDoctorResult:
+        assert execution_policy is not None
         assert environment is not None
         return doctor_result
 
     monkeypatch.setattr("cai_verify.cli.run_retrieval_doctor", successful_doctor)
     suite_path = Path(__file__).parents[1] / "examples/local/synthetic-suite.json"
+    policy_path = (
+        Path(__file__).parents[1] / "examples/aws/reciprocal-retrieval-policy.json"
+    )
 
     result = runner.invoke(
         app,
-        ["doctor", "retrieval", str(suite_path), "--report", "json"],
+        [
+            "doctor",
+            "retrieval",
+            str(suite_path),
+            "--execution-policy",
+            str(policy_path),
+            "--report",
+            "json",
+        ],
     )
 
     assert result.exit_code == 0
@@ -178,14 +218,27 @@ def test_retrieval_doctor_not_ready_and_unexpected_failure_exit_two(
     def unsuccessful_doctor(
         _suite: VerificationSuite,
         *,
+        execution_policy: AwsExecutionPolicy,
         environment: Mapping[str, str],
     ) -> RetrievalDoctorResult:
-        del environment
+        del environment, execution_policy
         return not_ready
 
     monkeypatch.setattr("cai_verify.cli.run_retrieval_doctor", unsuccessful_doctor)
     suite_path = Path(__file__).parents[1] / "examples/local/synthetic-suite.json"
-    result = runner.invoke(app, ["doctor", "retrieval", str(suite_path)])
+    policy_path = (
+        Path(__file__).parents[1] / "examples/aws/reciprocal-retrieval-policy.json"
+    )
+    result = runner.invoke(
+        app,
+        [
+            "doctor",
+            "retrieval",
+            str(suite_path),
+            "--execution-policy",
+            str(policy_path),
+        ],
+    )
 
     assert result.exit_code == int(CliExitCode.EXECUTION_ERROR)
     assert result.stdout == not_ready.to_terminal_bytes().decode()
@@ -195,13 +248,23 @@ def test_retrieval_doctor_not_ready_and_unexpected_failure_exit_two(
     def fail_doctor(
         _suite: VerificationSuite,
         *,
+        execution_policy: AwsExecutionPolicy,
         environment: Mapping[str, str],
     ) -> RetrievalDoctorResult:
-        del environment
+        del environment, execution_policy
         raise RuntimeError(secret)
 
     monkeypatch.setattr("cai_verify.cli.run_retrieval_doctor", fail_doctor)
-    failed = runner.invoke(app, ["doctor", "retrieval", str(suite_path)])
+    failed = runner.invoke(
+        app,
+        [
+            "doctor",
+            "retrieval",
+            str(suite_path),
+            "--execution-policy",
+            str(policy_path),
+        ],
+    )
     assert failed.exit_code == int(CliExitCode.EXECUTION_ERROR)
     assert failed.stdout == ""
     assert failed.stderr == "retrieval doctor failed\n"
@@ -229,6 +292,9 @@ def test_minimal_aws_retrieval_runner_cli_renders_and_redacts_failures(
 
     monkeypatch.setattr("cai_verify.cli.run_aws_retrieval_chain", successful_run)
     suite_path = Path(__file__).parents[1] / "examples/local/synthetic-suite.json"
+    policy_path = (
+        Path(__file__).parents[1] / "examples/aws/reciprocal-retrieval-policy.json"
+    )
     result = runner.invoke(
         app,
         [
@@ -236,6 +302,8 @@ def test_minimal_aws_retrieval_runner_cli_renders_and_redacts_failures(
             str(suite_path),
             "--assertion-id",
             "synthetic-assertion",
+            "--execution-policy",
+            str(policy_path),
             "--run-id",
             "synthetic-run",
             "--report",
@@ -259,6 +327,8 @@ def test_minimal_aws_retrieval_runner_cli_renders_and_redacts_failures(
             str(suite_path),
             "--assertion-id",
             "synthetic-assertion",
+            "--execution-policy",
+            str(policy_path),
             "--run-id",
             "synthetic-run",
         ],

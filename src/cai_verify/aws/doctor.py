@@ -8,6 +8,10 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, final
 
+from cai_verify.aws.execution_policy import (
+    AwsExecutionPolicy,
+    authorize_aws_execution,
+)
 from cai_verify.aws.identity import (
     AssumedRoleAwsIdentityProvider,
     AwsIdentityError,
@@ -156,12 +160,12 @@ class AwsDoctorResult:
 def run_aws_doctor(
     suite: VerificationSuite,
     *,
+    execution_policy: AwsExecutionPolicy,
     environment: Mapping[str, str],
     session_factory: AwsSessionFactory | None = None,
     evaluated_at: datetime | None = None,
 ) -> AwsDoctorResult:
     """Check declared AWS identities with read-only, bounded STS operations."""
-    now = (evaluated_at or datetime.now(UTC)).astimezone(UTC)
     target = suite.target
     top_level_issues: list[AwsDoctorIssueCode] = []
     if target.environment is DeploymentEnvironment.LOCAL:
@@ -178,6 +182,12 @@ def run_aws_doctor(
             issues=tuple(sorted(top_level_issues, key=lambda issue: issue.value)),
         )
 
+    authorize_aws_execution(
+        execution_policy,
+        target=target,
+        identities=suite.identities,
+    )
+    now = (evaluated_at or datetime.now(UTC)).astimezone(UTC)
     factory = session_factory or Boto3AwsSessionFactory()
     context = ExecutionContext(
         run_id="aws-doctor",

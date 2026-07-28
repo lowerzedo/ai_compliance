@@ -1,0 +1,23 @@
+{
+  "actions": [
+    {
+      "method": "POST",
+      "path": "/retrieve",
+      "service": "execute-api"
+    }
+  ],
+  "allowCurrentIdentity": false,
+  "applicationEndpoint": "https://retrieval.sandbox.example.test/v1",
+  "assumedRoleArns": [
+    "arn:aws:iam::111122223333:role/cai-verify-alpha-requester-a",
+    "arn:aws:iam::111122223333:role/cai-verify-alpha-requester-b",
+    "arn:aws:iam::111122223333:role/cai-verify-alpha-evidence-reader"
+  ],
+  "awsAccountId": "111122223333",
+  "cloudwatchLogGroups": [
+    "/aws/cai-verify/synthetic-retrieval"
+  ],
+  "partition": "aws",
+  "region": "eu-west-2",
+  "schemaVersion": "1alpha1"
+}

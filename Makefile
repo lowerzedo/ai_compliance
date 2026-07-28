@@ -1,4 +1,5 @@
 UV ?= uv
+MARKDOWN_PATHS := README.md $(wildcard examples/*.md examples/*/*.md) $(if $(wildcard docs),docs)
 
 .PHONY: audit build check docs format format-docs lint sync test typecheck
 
@@ -8,10 +9,10 @@ sync:
 format:
 	$(UV) run ruff format .
 	$(UV) run ruff check --fix .
-	$(UV) run mdformat README.md docs
+	$(UV) run mdformat $(MARKDOWN_PATHS)
 
 format-docs:
-	$(UV) run mdformat README.md docs
+	$(UV) run mdformat $(MARKDOWN_PATHS)
 
 lint:
 	$(UV) run ruff format --check .
@@ -24,7 +25,7 @@ test:
 	$(UV) run pytest
 
 docs:
-	$(UV) run mdformat --check README.md docs
+	$(UV) run mdformat --check $(MARKDOWN_PATHS)
 
 build:
 	$(UV) build --clear

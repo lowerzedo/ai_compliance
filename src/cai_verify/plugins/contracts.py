@@ -132,7 +132,7 @@ class ActionExecutionResult:
     started_at: datetime
     completed_at: datetime
     observed: RedactedValue
-    correlation_ids: tuple[str, ...]
+    correlation_ids: tuple[str, ...] = field(repr=False)
     limitations: tuple[str, ...]
     aws_request_ids: tuple[str, ...] = field(default=(), repr=False)
 

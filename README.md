@@ -4,20 +4,59 @@ Cloud AI Control Verifier (`cai-verify`) is an AWS-first, open-source tool for
 executing focused security-control tests against deployed AI applications and
 producing machine-readable evidence.
 
-This repository contains core assertion-result semantics, the strict `1alpha1`
-verification-suite configuration models, a read-only AWS identity doctor, a
-built-in AWS SigV4 application action adapter, a bounded CloudWatch Logs
-evidence probe with Amazon Bedrock invocation and pre-generation
-retrieval-canary normalization, a deterministic paired-canary retrieval
-boundary evaluator, a bounded retrieval readiness doctor, a minimal
-single-chain AWS retrieval runner, a bounded CloudTrail audit probe, and one
-executable local vertical slice. The local slice calls a loopback synthetic AI application,
-probes its process-local telemetry, evaluates four deterministic assertions,
-renders terminal and JSON reports, and finalizes an unsigned tamper-evident
-evidence run. It does not establish HIPAA, FedRAMP, NIST, or legal compliance.
+The first public alpha supports one deliberately narrow AWS path:
+**Reciprocal synthetic-canary retrieval-boundary verification for
+pre-instrumented AWS RAG applications.** It is intended for a platform or
+security engineer who already has two least-privilege requester roles, one
+separate read-only evidence role, two pre-seeded synthetic canaries, and an
+application that emits the required correlated retrieval event.
 
-The generated suite contract is committed at
-[`schemas/verification-suite-1alpha1.schema.json`](schemas/verification-suite-1alpha1.schema.json).
+The repository also contains configuration models, adapters, evaluators,
+doctors, diagnostic building blocks, and a local synthetic demonstration that
+are not all composed into public-alpha runners. A suite being schema-valid
+does not mean that every runner can execute every declaration.
+
+The generated contracts are committed at:
+
+- [`schemas/verification-suite-1alpha1.schema.json`](schemas/verification-suite-1alpha1.schema.json)
+- [`schemas/aws-execution-policy-1alpha1.schema.json`](schemas/aws-execution-policy-1alpha1.schema.json)
+
+Installed distributions expose the same reviewed resources without requiring
+the AWS extra:
+
+```console
+cai-verify schema suite
+cai-verify schema aws-execution-policy
+```
+
+## Public-alpha capability boundary
+
+The supported reciprocal result is the aggregate of two existing
+`retrievalBoundary` assertion results. It is not a third assertion or a
+compliance determination.
+
+| Capability                            | Configuration model | Evidence adapter | Evaluator | Executable runner                 | Public-alpha path |
+| ------------------------------------- | ------------------- | ---------------- | --------- | --------------------------------- | ----------------- |
+| Reciprocal AWS retrieval boundary     | Yes                 | Yes              | Yes       | Yes, fixed two-direction runner   | Yes               |
+| Single AWS retrieval boundary         | Yes                 | Yes              | Yes       | Yes, diagnostic single-chain path | No                |
+| Local synthetic control demonstration | Yes                 | Yes              | Yes       | Yes                               | No                |
+| Bedrock/provider invocation evidence  | Yes                 | Yes              | No        | No generic AWS runner             | No                |
+| CloudTrail audit-event evidence       | Yes                 | Yes              | No        | No generic AWS runner             | No                |
+| Encryption checks                     | Yes                 | No               | No        | No                                | No                |
+| Unauthorized-identity checks          | Yes                 | No               | No        | No                                | No                |
+
+The public alpha can show, for two exact requester paths and one run, whether
+each fresh, exactly correlated, application-reported final context included
+its positive-control canary and excluded the other requester’s boundary
+canary. A passing aggregate requires both directions to pass.
+
+It does not establish universal tenant isolation, document-store policy
+correctness, the correctness or honesty of application instrumentation,
+evidence authenticity, or HIPAA, FedRAMP, NIST, or legal compliance. Generic
+AWS suite execution; provider, audit, encryption, and unauthorized-identity
+orchestration; S3/KMS assessment; signing; JUnit, SARIF, and OSCAL; compliance
+mappings; OpenTelemetry; automatic canary creation; and production deployment
+remain outside this alpha.
 
 ## Verification suite schema
 
@@ -43,6 +82,10 @@ shell action, expression evaluator, template syntax, or literal credential
 field. `VerificationSuite.render_resolved_redacted(environment)` checks
 referenced variables without retaining their values and emits only `[REDACTED]`
 in their place.
+
+Configuration IDs are operator-controlled public labels. Action, probe,
+assertion, scenario, target, and run IDs must never contain secrets, tenant or
+user identifiers, account data, or other sensitive content.
 
 Compatibility notes for `1alpha1`:
 
@@ -85,6 +128,40 @@ uv run python scripts/generate_schemas.py
 Tests compare the generated bytes with the committed artifact so drift fails
 `make check`.
 
+## Operator-owned AWS execution policy
+
+The suite is untrusted and cannot authorize its own AWS target. Before any
+AWS-capable `cai-verify` command can create an SDK session, call STS, send an
+application request, collect CloudWatch Logs evidence, or reserve an evidence
+run, the operator must supply a separate strict execution policy:
+
+```console
+--execution-policy POLICY.json
+```
+
+The versioned `1alpha1` policy authorizes exact values only: AWS account,
+partition, region, normalized HTTPS endpoint, permitted method/path/service,
+assumed-role ARNs, optional current-identity use (disabled by default), and
+CloudWatch log groups. Its bounded loader accepts at most 64 KiB of
+duplicate-free UTF-8 JSON. Unknown fields, URL credentials, query strings,
+fragments, environment references, secrets, expressions, field paths, globs,
+regular expressions, wildcards, and inconsistent region/partition/role
+combinations are rejected.
+
+Policy denial is an operational failure, not assertion evidence. Policy
+contents are never copied into reports or evidence. Exact authorization also
+does not discover or grant IAM permissions: the operator remains responsible
+for independently configuring requester roles with only the required
+`execute-api:Invoke` resources, the evidence role with
+`logs:FilterLogEvents` on the exact log group, and the existing bounded STS
+identity-acquisition calls.
+
+This required option is an intentional pre-alpha security compatibility
+change. It applies to `doctor aws`, `doctor retrieval`,
+`run-aws-retrieval`, and `run-aws-reciprocal-retrieval`. See
+[`examples/aws/README.md`](examples/aws/README.md) for the synthetic contract
+and operator walkthrough.
+
 ## AWS identity doctor
 
 Install the optional AWS support when installing the package:
@@ -96,7 +173,8 @@ uv sync --extra aws --dev
 Check the identities declared by a non-local JSON suite:
 
 ```console
-uv run cai-verify doctor aws SUITE.json
+uv run cai-verify doctor aws SUITE.json \
+  --execution-policy POLICY.json
 ```
 
 Use `--report json` for canonical machine-readable output. The command uses the
@@ -118,7 +196,8 @@ Check whether each scenario-local `retrievalBoundary` chain is ready for a
 later execution attempt:
 
 ```console
-uv run cai-verify doctor retrieval SUITE.json
+uv run cai-verify doctor retrieval SUITE.json \
+  --execution-policy POLICY.json
 ```
 
 Use `--report json` for the canonical version-1 machine-readable result. The
@@ -149,6 +228,7 @@ can be executed with:
 ```console
 uv run cai-verify run-aws-retrieval SUITE.json \
   --assertion-id requester-a-retrieval-boundary \
+  --execution-policy POLICY.json \
   --run-id synthetic-retrieval-run
 ```
 
@@ -163,6 +243,96 @@ This deliberately narrow runner handles one existing paired-canary chain. It
 does not create canary documents, run multiple assertions, persist an evidence
 bundle, mutate cloud state, discover permissions, or establish tenant isolation
 beyond the selected fresh evidence path. It does not establish compliance.
+
+## Reciprocal AWS retrieval runner
+
+The public-alpha runner executes the two directions of one exact reciprocal
+scenario:
+
+```console
+cai-verify run-aws-reciprocal-retrieval SUITE.json \
+  --scenario-id reciprocal-requester-retrieval \
+  --execution-policy POLICY.json \
+  --run-id RUN_ID \
+  --evidence-root .cai-verify/runs \
+  --report terminal
+```
+
+The same orchestration is available through
+`AwsReciprocalRetrievalRunOptions`,
+`AwsReciprocalRetrievalRunResult`, and
+`run_aws_reciprocal_retrieval`.
+
+The selected scenario must contain exactly two non-mutating `execute-api`
+actions, two CloudWatch Logs probes requesting only `retrievalCanary`, and two
+`retrievalBoundary` assertions. It must use two distinct effective requester
+identities, one shared evidence identity distinct from both requesters, one
+declared log group, reversed canary declarations, and one unique
+action/probe/assertion chain per direction. Extra, duplicated, overlapping,
+mixed-purpose, partially reciprocal, or ambiguous components fail before AWS
+access.
+
+Because assertion results are public artifacts, reciprocal assertion
+limitation descriptions must be selected from the evaluator-owned
+`RETRIEVAL_BOUNDARY_FIXED_LIMITATIONS`; arbitrary suite text is rejected
+before reservation or AWS access. The example uses the fixed statement
+`The retrieval evidence is application-reported.` Other suite text remains
+schema-valid but is not runnable through this focused public-alpha path.
+
+After pure validation and exact execution-policy authorization, the runner
+reserves the run, acquires all three identities once, and validates every
+lease before the first application call. It executes both chains sequentially
+in assertion-ID order. Each requester lease closes immediately after its
+action; the shared evidence-reader lease remains open only through the second
+probe. All leases close before evaluation, reporting, or persistence. The
+orchestration has a five-minute scheduling budget in addition to the existing
+narrower in-flight limits and makes only the bounded STS operations, two
+direct SigV4 requests, and two `logs:FilterLogEvents` collections.
+Each assumed-role lease is bound by `sts:GetCallerIdentity` to the declared
+role name and session, then checked against the exact target account and
+partition. Required environment values are read once into an immutable,
+minimal snapshot before authorization and are not reread from the caller's
+mapping during execution.
+
+Exact application correlation remains mandatory and transient. The two
+successful actions cannot reuse one correlation value, and a correlation for
+one direction cannot satisfy the other. No correlation, AWS request ID,
+CloudWatch message, canary value, endpoint, log group, account, ARN, identity,
+credential, environment reference, request content, response content, or SDK
+diagnostic is written to output or evidence.
+
+Both existing assertion results are always evaluated after trustworthy
+normalized execution, even if the first direction is `FAIL`, `INCONCLUSIVE`,
+or normalized `ERROR`. Aggregate status and exit code are conservative:
+
+| Direction results                   | Aggregate      | Exit |
+| ----------------------------------- | -------------- | ---: |
+| Both `PASS`                         | `PASS`         |    0 |
+| Either `FAIL`                       | `FAIL`         |    1 |
+| `ERROR` without `FAIL`              | `ERROR`        |    2 |
+| `INCONCLUSIVE` without either above | `INCONCLUSIVE` |    3 |
+
+Operational failures, including invalid configuration or environment, policy
+denial, identity acquisition, budget exhaustion, an invalid normalized shape,
+run collision, persistence failure, or immediate integrity-verification
+failure, emit only `AWS reciprocal retrieval run failed` on standard error,
+produce no report on standard output, and exit `2`.
+
+Every normalized status finalizes one redacted, unsigned, tamper-evident bundle
+with exactly nine non-manifest artifacts: `run.json`; two hashed action
+artifacts; two hashed probe artifacts; two hashed assertion-result artifacts;
+`reports/report.json`; and `reports/terminal.txt`. The action and probe
+artifacts are `INTERNAL`; results and reports are `PUBLIC`.
+`manifest.json` is created last and verified immediately offline. A path is
+returned only after that verification succeeds.
+
+`run.json` stores no raw target ID. Its target digest is a stable SHA-256
+pseudonym derived only from that operator-controlled label. This supports
+determinism, but is not anonymity when the label is guessable. Interrupted or
+failed unfinalized runs are preserved without `manifest.json`; they are never
+resumed, adopted, overwritten, automatically deleted, or reported complete.
+Operators must inspect and securely preserve or remove those abandoned
+directories according to local policy.
 
 ## AWS SigV4 application actions
 
@@ -181,15 +351,20 @@ normalized result. The transport recognizes only the fixed AWS
 at most two bounded values in the additive, non-repr
 `ActionExecutionResult.aws_request_ids` field so a probe can distinguish one
 usable identifier from missing or multiple identifiers. Raw headers remain
-excluded. Caller-supplied `X-Amzn-RequestId` is reserved.
+excluded. `ActionExecutionResult.correlation_ids` is now also suppressed from
+its representation while remaining available to evaluators and probes. This
+representation-only hardening is an intentional pre-alpha compatibility
+change for callers that asserted the previous dataclass `repr`. Constructor
+and field-access behavior are unchanged. Caller-supplied `X-Amzn-RequestId` is
+reserved.
 
-The new action-result field defaults to an empty tuple, so existing constructors
-remain source compatible. Local action evidence serialization is unchanged.
-Alpha configurations that attempted to supply `X-Amzn-RequestId` as an action
-input are now rejected. The adapter exposes an injected clock and transport for
-network-isolated deterministic tests. The minimal retrieval runner composes
-this adapter for one selected chain; general cloud orchestration and evidence
-production remain later roadmap work.
+The new action-result field defaults to an empty tuple, so existing
+constructors remain source compatible. Local action evidence serialization is
+unchanged. Alpha configurations that attempted to supply `X-Amzn-RequestId` as
+an action input are now rejected. The adapter exposes an injected clock and
+transport for network-isolated deterministic tests. The single-chain and fixed
+reciprocal retrieval runners compose this adapter; general cloud
+orchestration remains outside the alpha.
 
 ## AWS CloudWatch Logs evidence
 
@@ -295,8 +470,9 @@ instrumented target can emit false records, and `PRE_GENERATION` is not
 cryptographically proven. Model output, refusal, or silence cannot prove what
 the final retrieval context contained.
 
-Only the minimal single-chain retrieval runner composes this probe. General AWS
-suite orchestration remains a separate roadmap slice.
+Only the diagnostic single-chain runner and fixed reciprocal public-alpha
+runner compose this probe. General AWS suite orchestration remains out of
+scope.
 
 ## Paired-canary retrieval-boundary evaluation
 
@@ -335,9 +511,10 @@ The committed
 requester A, requester B, and a separate evidence-reader identity. It reverses
 the baseline and boundary canaries for the two requesters and drives
 network-isolated isolated/vulnerable evaluator contract tests. The fixture
-does not execute AWS by itself. The minimal runner can select one assertion
-from an equivalent validated runtime JSON suite; there is still no cross-action
-aggregate assertion.
+does not execute AWS by itself. The diagnostic runner can select one assertion
+from an equivalent validated runtime JSON suite; the reciprocal runner
+orchestrates exactly both reversed assertions and aggregates their existing
+statuses. There is no cross-action aggregate assertion.
 
 ## AWS CloudTrail audit evidence
 
@@ -398,6 +575,21 @@ the bundle. Writing and verification share bounded schema and I/O limits: 8 MiB
 manifests, 10,000 artifacts, 64 MiB per artifact, and 512 MiB of artifact bytes
 per run. Signing is intentionally not implemented yet.
 
+The reciprocal AWS path uses fixed allowlist serializers for its exact
+built-in action and retrieval-probe contracts. It never serializes generic
+adapter objects, reflected fields, arbitrary redacted wrappers, arbitrary
+adapter limitations, or exception strings. Verify a completed reciprocal run
+without AWS access:
+
+```console
+cai-verify verify-evidence .cai-verify/runs/RUN_ID --report json
+```
+
+Tampering detection is integrity, not authenticity. Without a signature, key,
+trust root, or independently trusted execution environment, an attacker who
+can replace the complete bundle can produce a different internally consistent
+unsigned bundle.
+
 ## Local synthetic demonstration
 
 The committed suite uses only synthetic data and the standard-library loopback
@@ -430,6 +622,21 @@ uv run cai-verify verify-evidence .cai-verify/runs/local-secure --report json
 Integrity verification exits `0` for an internally consistent unsigned bundle
 and `2` for a missing, malformed, or modified artifact. It detects tampering but
 does not authenticate who produced the evidence.
+
+## Public-alpha release validation
+
+Automated tests are deliberately network-isolated. A protected manual live-AWS
+run in a dedicated synthetic sandbox is mandatory before describing a release
+as publicly validated. The gate must demonstrate an isolated reciprocal
+`PASS`, an intentionally vulnerable reciprocal `FAIL`, real CloudWatch
+propagation, exact account/partition/region/identity/endpoint/log-group
+authorization, bounded runtime, redacted output and artifacts, and successful
+offline verification.
+
+Until that protected run is recorded, the implementation may be described as
+code-complete with live validation pending. Mocked or injected transports,
+schema validation, and offline evidence verification do not satisfy this
+gate.
 
 ## Requirements
 
@@ -464,9 +671,9 @@ Run the complete local quality gate:
 make check
 ```
 
-The test configuration disables socket access by default. Three integration
-tests permit only `127.0.0.1` for the synthetic application; no test can reach
-the internet or AWS.
+The test configuration disables socket access by default. The local synthetic
+integration tests permit only `127.0.0.1`; no normal test can reach the
+internet or AWS.
 
 ## Development commands
 

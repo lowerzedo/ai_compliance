@@ -1,0 +1,241 @@
+{
+  "evidencePolicy": {
+    "clockSkewTolerance": "PT30S",
+    "maxAge": "PT5M"
+  },
+  "identities": [
+    {
+      "id": "requester-a",
+      "roleArn": "arn:aws:iam::111122223333:role/cai-verify-alpha-requester-a",
+      "sessionName": "cai-verify-alpha-requester-a",
+      "type": "awsAssumeRole"
+    },
+    {
+      "id": "requester-b",
+      "roleArn": "arn:aws:iam::111122223333:role/cai-verify-alpha-requester-b",
+      "sessionName": "cai-verify-alpha-requester-b",
+      "type": "awsAssumeRole"
+    },
+    {
+      "id": "evidence-reader",
+      "roleArn": "arn:aws:iam::111122223333:role/cai-verify-alpha-evidence-reader",
+      "sessionName": "cai-verify-alpha-evidence-reader",
+      "type": "awsAssumeRole"
+    }
+  ],
+  "limitations": [
+    {
+      "description": "This synthetic reciprocal pair does not establish universal tenant isolation or compliance.",
+      "id": "focused-technical-assessment-only"
+    }
+  ],
+  "metadata": {
+    "description": "Synthetic public-alpha reciprocal retrieval-boundary verification.",
+    "name": "aws-reciprocal-retrieval-alpha",
+    "owners": [
+      "security-team@example.test"
+    ]
+  },
+  "scenarios": [
+    {
+      "actions": [
+        {
+          "id": "retrieve-as-requester-a",
+          "identityRef": "requester-a",
+          "inputs": [
+            {
+              "location": "json",
+              "name": "syntheticQuery",
+              "value": {
+                "sensitive": false,
+                "source": "literal",
+                "value": "requester-a-synthetic-topic"
+              }
+            }
+          ],
+          "method": "POST",
+          "mutating": false,
+          "path": "/retrieve",
+          "region": "eu-west-2",
+          "service": "execute-api",
+          "timeoutSeconds": 15,
+          "type": "awsSigV4"
+        },
+        {
+          "id": "retrieve-as-requester-b",
+          "identityRef": "requester-b",
+          "inputs": [
+            {
+              "location": "json",
+              "name": "syntheticQuery",
+              "value": {
+                "sensitive": false,
+                "source": "literal",
+                "value": "requester-b-synthetic-topic"
+              }
+            }
+          ],
+          "method": "POST",
+          "mutating": false,
+          "path": "/retrieve",
+          "region": "eu-west-2",
+          "service": "execute-api",
+          "timeoutSeconds": 15,
+          "type": "awsSigV4"
+        }
+      ],
+      "assertions": [
+        {
+          "actionRef": "retrieve-as-requester-a",
+          "controlRefs": [
+            {
+              "limitations": [
+                {
+                  "description": "The synthetic contract covers only the declared reciprocal runtime path.",
+                  "id": "synthetic-path-only"
+                }
+              ],
+              "rationale": "The fixed pair exercises one positive and one boundary canary for requester A.",
+              "reference": "reciprocal-retrieval-boundary",
+              "relationship": "supports-assessment",
+              "responsibilities": [
+                {
+                  "description": "Execute the fixed contract and preserve normalized evidence.",
+                  "party": "verifier"
+                },
+                {
+                  "description": "Provide bounded STS, execute-api, and CloudWatch Logs services.",
+                  "party": "cloudProvider"
+                },
+                {
+                  "description": "Instrument the application and pre-seed synthetic canaries correctly.",
+                  "party": "customer"
+                }
+              ],
+              "review": {
+                "reviewedAt": "2026-07-28",
+                "reviewedBy": "security-reviewer@example.test"
+              },
+              "scope": "One synthetic requester A retrieval path and its declared evidence source.",
+              "source": "Synthetic public-alpha contract",
+              "sourceVersion": "1"
+            }
+          ],
+          "id": "requester-a-retrieval-boundary",
+          "limitations": [
+            {
+              "description": "The retrieval evidence is application-reported.",
+              "id": "instrumentation-trust"
+            }
+          ],
+          "probeRef": "requester-a-retrieval",
+          "type": "retrievalBoundary"
+        },
+        {
+          "actionRef": "retrieve-as-requester-b",
+          "controlRefs": [
+            {
+              "limitations": [
+                {
+                  "description": "The synthetic contract covers only the declared reciprocal runtime path.",
+                  "id": "synthetic-path-only"
+                }
+              ],
+              "rationale": "The fixed pair exercises one positive and one boundary canary for requester B.",
+              "reference": "reciprocal-retrieval-boundary",
+              "relationship": "supports-assessment",
+              "responsibilities": [
+                {
+                  "description": "Execute the fixed contract and preserve normalized evidence.",
+                  "party": "verifier"
+                },
+                {
+                  "description": "Provide bounded STS, execute-api, and CloudWatch Logs services.",
+                  "party": "cloudProvider"
+                },
+                {
+                  "description": "Instrument the application and pre-seed synthetic canaries correctly.",
+                  "party": "customer"
+                }
+              ],
+              "review": {
+                "reviewedAt": "2026-07-28",
+                "reviewedBy": "security-reviewer@example.test"
+              },
+              "scope": "One synthetic requester B retrieval path and its declared evidence source.",
+              "source": "Synthetic public-alpha contract",
+              "sourceVersion": "1"
+            }
+          ],
+          "id": "requester-b-retrieval-boundary",
+          "limitations": [
+            {
+              "description": "The retrieval evidence is application-reported.",
+              "id": "instrumentation-trust"
+            }
+          ],
+          "probeRef": "requester-b-retrieval",
+          "type": "retrievalBoundary"
+        }
+      ],
+      "description": "Execute the fixed two-requester reciprocal synthetic-canary contract.",
+      "id": "reciprocal-requester-retrieval",
+      "identityRef": "requester-a",
+      "probes": [
+        {
+          "actionRef": "retrieve-as-requester-a",
+          "identityRef": "evidence-reader",
+          "id": "requester-a-retrieval",
+          "logGroup": "/aws/cai-verify/synthetic-retrieval",
+          "maxAge": "PT3M",
+          "observations": [
+            "retrievalCanary"
+          ],
+          "retrieval": {
+            "baselineCanary": {
+              "name": "CAI_REQUESTER_A_CANARY",
+              "source": "environment"
+            },
+            "boundaryCanary": {
+              "name": "CAI_REQUESTER_B_CANARY",
+              "source": "environment"
+            }
+          },
+          "type": "cloudWatchLogs"
+        },
+        {
+          "actionRef": "retrieve-as-requester-b",
+          "identityRef": "evidence-reader",
+          "id": "requester-b-retrieval",
+          "logGroup": "/aws/cai-verify/synthetic-retrieval",
+          "maxAge": "PT3M",
+          "observations": [
+            "retrievalCanary"
+          ],
+          "retrieval": {
+            "baselineCanary": {
+              "name": "CAI_REQUESTER_B_CANARY",
+              "source": "environment"
+            },
+            "boundaryCanary": {
+              "name": "CAI_REQUESTER_A_CANARY",
+              "source": "environment"
+            }
+          },
+          "type": "cloudWatchLogs"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": "1alpha1",
+  "target": {
+    "allowedHosts": [
+      "retrieval.sandbox.example.test"
+    ],
+    "awsAccountId": "111122223333",
+    "awsRegion": "eu-west-2",
+    "endpoint": "https://retrieval.sandbox.example.test/v1",
+    "environment": "sandbox",
+    "id": "synthetic-retrieval-application"
+  }
+}

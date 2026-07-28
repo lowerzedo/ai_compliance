@@ -98,6 +98,7 @@ def test_assumed_role_uses_external_id_and_temporary_credentials() -> None:
     )
     add_caller_identity(
         assumed_stubber,
+        service="sts",
         resource="assumed-role/cai-verify-unauthorized/cai-verify-synthetic",
     )
     factory = QueueSessionFactory(sessions(base_client, assumed_client))
@@ -118,6 +119,47 @@ def test_assumed_role_uses_external_id_and_temporary_credentials() -> None:
         assert lease.matches_account("111122223333")
         assert _ENVIRONMENT["CAI_VERIFY_EXTERNAL_ID"] not in repr(provider)
         lease.close()
+    finally:
+        deactivate(base_stubber, assumed_stubber)
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "assumed-role/different-role/cai-verify-synthetic",
+        "assumed-role/cai-verify-unauthorized/different-session",
+    ],
+)
+def test_assumed_role_rejects_a_different_sts_caller_principal(
+    resource: str,
+) -> None:
+    """A lease is not bound until STS proves the exact role and session."""
+    suite = _suite()
+    identity = cast("AssumedRoleIdentity", suite.identities[1])
+    base_client, base_stubber = sts_client()
+    assumed_client, assumed_stubber = sts_client()
+    add_assume_role(
+        base_stubber,
+        expires_at=_EVALUATED_AT + timedelta(hours=1),
+        external_id=_ENVIRONMENT["CAI_VERIFY_EXTERNAL_ID"],
+    )
+    add_caller_identity(
+        assumed_stubber,
+        service="sts",
+        resource=resource,
+    )
+    factory = QueueSessionFactory(sessions(base_client, assumed_client))
+    activate(base_stubber, assumed_stubber)
+    try:
+        provider = AssumedRoleAwsIdentityProvider(
+            environment=_ENVIRONMENT,
+            session_factory=factory,
+        )
+
+        with pytest.raises(AwsIdentityError) as caught:
+            provider.provide_identity(_request(suite, identity))
+
+        assert caught.value.code is AwsIdentityFailureCode.INVALID_RESPONSE
     finally:
         deactivate(base_stubber, assumed_stubber)
 

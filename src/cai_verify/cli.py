@@ -3,6 +3,7 @@
 import json
 import os
 from enum import StrEnum
+from importlib.resources import files
 from pathlib import Path
 from typing import Annotated
 
@@ -10,8 +11,11 @@ import typer
 
 from cai_verify import __version__
 from cai_verify.aws import (
+    AwsReciprocalRetrievalRunOptions,
     AwsRetrievalRunOptions,
+    load_aws_execution_policy,
     run_aws_doctor,
+    run_aws_reciprocal_retrieval,
     run_aws_retrieval_chain,
     run_retrieval_doctor,
 )
@@ -33,7 +37,15 @@ doctor_app = typer.Typer(
     help="Check runtime prerequisites without executing verification actions.",
     no_args_is_help=True,
 )
+schema_app = typer.Typer(
+    help="Print installed JSON Schema resources without network access.",
+    no_args_is_help=True,
+)
 app.add_typer(doctor_app, name="doctor")
+app.add_typer(schema_app, name="schema")
+
+_SUITE_SCHEMA_RESOURCE = "verification-suite-1alpha1.schema.json"
+_AWS_EXECUTION_POLICY_SCHEMA_RESOURCE = "aws-execution-policy-1alpha1.schema.json"
 
 
 class ReportFormat(StrEnum):
@@ -54,24 +66,42 @@ def version() -> None:
     typer.echo(__version__)
 
 
+@schema_app.command("suite")
+def schema_suite() -> None:
+    """Print the installed verification-suite JSON Schema."""
+    typer.echo(_schema_bytes(_SUITE_SCHEMA_RESOURCE).decode(), nl=False)
+
+
+@schema_app.command("aws-execution-policy")
+def schema_aws_execution_policy() -> None:
+    """Print the installed operator-owned AWS execution-policy JSON Schema."""
+    typer.echo(
+        _schema_bytes(_AWS_EXECUTION_POLICY_SCHEMA_RESOURCE).decode(),
+        nl=False,
+    )
+
+
 @doctor_app.command("aws")
 def doctor_aws(
     suite_path: Annotated[
         Path,
-        typer.Argument(
-            exists=True,
-            file_okay=True,
-            dir_okay=False,
-            readable=True,
-            resolve_path=True,
-        ),
+        typer.Argument(),
+    ],
+    execution_policy_path: Annotated[
+        Path,
+        typer.Option("--execution-policy"),
     ],
     report: Annotated[ReportFormat, typer.Option("--report")] = ReportFormat.TERMINAL,
 ) -> None:
     """Check declared AWS identities with read-only STS calls."""
     try:
         suite = load_suite(suite_path)
-        result = run_aws_doctor(suite, environment=os.environ)
+        execution_policy = load_aws_execution_policy(execution_policy_path)
+        result = run_aws_doctor(
+            suite,
+            execution_policy=execution_policy,
+            environment=os.environ,
+        )
     except Exception:  # noqa: BLE001 - public diagnostics must remain redacted.
         typer.echo("AWS doctor failed", err=True)
         raise typer.Exit(code=int(CliExitCode.EXECUTION_ERROR)) from None
@@ -89,20 +119,23 @@ def doctor_aws(
 def doctor_retrieval(
     suite_path: Annotated[
         Path,
-        typer.Argument(
-            exists=True,
-            file_okay=True,
-            dir_okay=False,
-            readable=True,
-            resolve_path=True,
-        ),
+        typer.Argument(),
+    ],
+    execution_policy_path: Annotated[
+        Path,
+        typer.Option("--execution-policy"),
     ],
     report: Annotated[ReportFormat, typer.Option("--report")] = ReportFormat.TERMINAL,
 ) -> None:
     """Check whether retrieval-boundary chains are ready to be attempted."""
     try:
         suite = load_suite(suite_path)
-        result = run_retrieval_doctor(suite, environment=os.environ)
+        execution_policy = load_aws_execution_policy(execution_policy_path)
+        result = run_retrieval_doctor(
+            suite,
+            execution_policy=execution_policy,
+            environment=os.environ,
+        )
     except Exception:  # noqa: BLE001 - public diagnostics must remain redacted.
         typer.echo("retrieval doctor failed", err=True)
         raise typer.Exit(code=int(CliExitCode.EXECUTION_ERROR)) from None
@@ -162,31 +195,71 @@ def run_local(
 def run_aws_retrieval(
     suite_path: Annotated[
         Path,
-        typer.Argument(
-            exists=True,
-            file_okay=True,
-            dir_okay=False,
-            readable=True,
-            resolve_path=True,
-        ),
+        typer.Argument(),
     ],
     assertion_id: Annotated[str, typer.Option("--assertion-id")],
+    execution_policy_path: Annotated[
+        Path,
+        typer.Option("--execution-policy"),
+    ],
     run_id: Annotated[str, typer.Option("--run-id")],
     report: Annotated[ReportFormat, typer.Option("--report")] = ReportFormat.TERMINAL,
 ) -> None:
     """Run one pre-seeded AWS retrieval-boundary chain."""
     try:
         suite = load_suite(suite_path)
+        execution_policy = load_aws_execution_policy(execution_policy_path)
         result = run_aws_retrieval_chain(
             suite,
             AwsRetrievalRunOptions(
                 run_id=run_id,
                 assertion_id=assertion_id,
+                execution_policy=execution_policy,
                 environment=os.environ,
             ),
         )
     except Exception:  # noqa: BLE001 - public diagnostics must remain redacted.
         typer.echo("AWS retrieval run failed", err=True)
+        raise typer.Exit(code=int(CliExitCode.EXECUTION_ERROR)) from None
+    content = (
+        result.json_report if report is ReportFormat.JSON else result.terminal_report
+    )
+    typer.echo(content.decode(), nl=False)
+    if result.exit_code:
+        raise typer.Exit(code=int(result.exit_code))
+
+
+@app.command("run-aws-reciprocal-retrieval")
+def run_aws_reciprocal(  # noqa: PLR0913 - public CLI options are explicit.
+    suite_path: Annotated[Path, typer.Argument()],
+    scenario_id: Annotated[str, typer.Option("--scenario-id")],
+    execution_policy_path: Annotated[
+        Path,
+        typer.Option("--execution-policy"),
+    ],
+    run_id: Annotated[str, typer.Option("--run-id")],
+    evidence_root: Annotated[
+        Path,
+        typer.Option("--evidence-root"),
+    ] = Path(".cai-verify/runs"),
+    report: Annotated[ReportFormat, typer.Option("--report")] = ReportFormat.TERMINAL,
+) -> None:
+    """Run the fixed reciprocal AWS retrieval-boundary public-alpha path."""
+    try:
+        suite = load_suite(suite_path)
+        execution_policy = load_aws_execution_policy(execution_policy_path)
+        result = run_aws_reciprocal_retrieval(
+            suite,
+            AwsReciprocalRetrievalRunOptions(
+                run_id=run_id,
+                scenario_id=scenario_id,
+                evidence_root=evidence_root,
+                execution_policy=execution_policy,
+                environment=os.environ,
+            ),
+        )
+    except Exception:  # noqa: BLE001 - public diagnostics must remain redacted.
+        typer.echo("AWS reciprocal retrieval run failed", err=True)
         raise typer.Exit(code=int(CliExitCode.EXECUTION_ERROR)) from None
     content = (
         result.json_report if report is ReportFormat.JSON else result.terminal_report
@@ -242,3 +315,8 @@ def verify_evidence(
             typer.echo(f"[{issue.code.value}]{suffix}")
     if not verification.valid:
         raise typer.Exit(code=2)
+
+
+def _schema_bytes(filename: str) -> bytes:
+    """Read one build-time packaged schema resource."""
+    return files("cai_verify").joinpath("schemas", filename).read_bytes()

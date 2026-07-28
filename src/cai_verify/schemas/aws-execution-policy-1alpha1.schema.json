@@ -1,0 +1,133 @@
+{
+  "$defs": {
+    "AwsExecutionPolicyAction": {
+      "additionalProperties": false,
+      "description": "One exact non-mutating application action authorization.",
+      "properties": {
+        "method": {
+          "enum": [
+            "GET",
+            "POST"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/$defs/AwsPolicyActionPath"
+        },
+        "service": {
+          "enum": [
+            "execute-api",
+            "bedrock-runtime"
+          ],
+          "title": "Service",
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "path",
+        "service"
+      ],
+      "title": "AwsExecutionPolicyAction",
+      "type": "object"
+    },
+    "AwsPolicyAccountId": {
+      "pattern": "^\\d{12}$",
+      "type": "string"
+    },
+    "AwsPolicyActionPath": {
+      "maxLength": 2048,
+      "pattern": "^/[A-Za-z0-9._~!:@&'+,;=%/-]*$",
+      "type": "string"
+    },
+    "AwsPolicyLogGroup": {
+      "pattern": "^[A-Za-z0-9_./#-]{1,512}$",
+      "type": "string"
+    },
+    "AwsPolicyRegion": {
+      "pattern": "^[a-z]{2}(?:-gov)?-[a-z]+-\\d$",
+      "type": "string"
+    },
+    "AwsPolicyRoleArn": {
+      "pattern": "^arn:(?:aws|aws-us-gov|aws-cn):iam::\\d{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$",
+      "type": "string"
+    }
+  },
+  "$id": "https://schemas.cai-verify.dev/aws-execution-policy/1alpha1/schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Versioned exact-match boundary independently owned by the operator.",
+  "properties": {
+    "actions": {
+      "items": {
+        "$ref": "#/$defs/AwsExecutionPolicyAction"
+      },
+      "minItems": 1,
+      "title": "Actions",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "allowCurrentIdentity": {
+      "default": false,
+      "title": "Allowcurrentidentity",
+      "type": "boolean"
+    },
+    "applicationEndpoint": {
+      "format": "uri",
+      "minLength": 1,
+      "pattern": "^https://[^/?#@]+(?:/[^?#]*)?$",
+      "title": "Applicationendpoint",
+      "type": "string"
+    },
+    "assumedRoleArns": {
+      "items": {
+        "$ref": "#/$defs/AwsPolicyRoleArn"
+      },
+      "title": "Assumedrolearns",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "awsAccountId": {
+      "$ref": "#/$defs/AwsPolicyAccountId"
+    },
+    "cloudwatchLogGroups": {
+      "items": {
+        "$ref": "#/$defs/AwsPolicyLogGroup"
+      },
+      "minItems": 1,
+      "title": "Cloudwatchloggroups",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "partition": {
+      "enum": [
+        "aws",
+        "aws-us-gov",
+        "aws-cn"
+      ],
+      "title": "Partition",
+      "type": "string"
+    },
+    "region": {
+      "$ref": "#/$defs/AwsPolicyRegion"
+    },
+    "schemaVersion": {
+      "const": "1alpha1",
+      "title": "Schemaversion",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "awsAccountId",
+    "partition",
+    "region",
+    "applicationEndpoint",
+    "actions",
+    "assumedRoleArns",
+    "cloudwatchLogGroups"
+  ],
+  "title": "AWS Execution Policy 1alpha1",
+  "type": "object"
+}

@@ -11,6 +11,7 @@ import yaml
 
 from cai_verify.aws import AwsDoctorIssueCode, run_aws_doctor
 from cai_verify.config import VerificationSuite
+from tests.aws.policy import authorizing_execution_policy
 from tests.aws.stubs import (
     QueueSessionFactory,
     activate,
@@ -44,6 +45,7 @@ def test_aws_doctor_is_ready_without_disclosing_identity_values() -> None:
     )
     add_caller_identity(
         assumed_stubber,
+        service="sts",
         resource="assumed-role/cai-verify-unauthorized/cai-verify-synthetic",
     )
     factory = QueueSessionFactory(
@@ -53,6 +55,7 @@ def test_aws_doctor_is_ready_without_disclosing_identity_values() -> None:
     try:
         result = run_aws_doctor(
             suite,
+            execution_policy=authorizing_execution_policy(suite),
             environment=_ENVIRONMENT,
             session_factory=factory,
             evaluated_at=_EVALUATED_AT,
@@ -93,6 +96,7 @@ def test_account_mismatch_and_expired_role_are_not_ready() -> None:
     )
     add_caller_identity(
         assumed_stubber,
+        service="sts",
         resource="assumed-role/cai-verify-unauthorized/cai-verify-synthetic",
     )
     factory = QueueSessionFactory(
@@ -102,6 +106,7 @@ def test_account_mismatch_and_expired_role_are_not_ready() -> None:
     try:
         result = run_aws_doctor(
             suite,
+            execution_policy=authorizing_execution_policy(suite),
             environment=_ENVIRONMENT,
             session_factory=factory,
             evaluated_at=_EVALUATED_AT,
@@ -126,6 +131,7 @@ def test_local_suite_is_rejected_before_any_sdk_session_is_created() -> None:
 
     result = run_aws_doctor(
         suite,
+        execution_policy=authorizing_execution_policy(suite),
         environment={},
         session_factory=factory,
         evaluated_at=_EVALUATED_AT,

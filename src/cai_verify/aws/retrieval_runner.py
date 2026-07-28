@@ -12,6 +12,10 @@ from typing import TYPE_CHECKING, cast, final
 from cai_verify.assertions import RetrievalBoundaryEvaluator
 from cai_verify.aws.action import AwsSigV4ActionAdapter
 from cai_verify.aws.cloudwatch_logs import CloudWatchLogsProbeAdapter
+from cai_verify.aws.execution_policy import (
+    AwsExecutionPolicy,
+    authorize_aws_execution,
+)
 from cai_verify.aws.identity import (
     AssumedRoleAwsIdentityProvider,
     AwsIdentityError,
@@ -79,6 +83,7 @@ class AwsRetrievalRunOptions:
 
     run_id: str
     assertion_id: str
+    execution_policy: AwsExecutionPolicy = field(repr=False)
     environment: Mapping[str, str] = field(repr=False)
     session_factory: AwsSessionFactory = field(
         default_factory=Boto3AwsSessionFactory,
@@ -143,6 +148,13 @@ def run_aws_retrieval_chain(
         monotonic=options.monotonic,
     )
     _prevalidate_probe_environment(probe_adapter, selected.probe)
+    authorize_aws_execution(
+        options.execution_policy,
+        target=suite.target,
+        identities=(selected.action_identity, selected.evidence_identity),
+        actions=(selected.action,),
+        cloudwatch_log_groups=(selected.probe.log_group,),
+    )
     action_adapter = options.action_adapter or AwsSigV4ActionAdapter(
         environment=options.environment,
         clock=lambda: evaluated_at,
