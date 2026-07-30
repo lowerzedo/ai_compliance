@@ -269,6 +269,38 @@ def run_aws_reciprocal(  # noqa: PLR0913 - public CLI options are explicit.
         raise typer.Exit(code=int(result.exit_code))
 
 
+@app.command("ui")
+def ui_console(
+    evidence_root: Annotated[
+        Path,
+        typer.Option("--evidence-root", file_okay=False, resolve_path=True),
+    ] = Path(".cai-verify/runs"),
+    port: Annotated[
+        int,
+        typer.Option("--port", min=0, max=65535),
+    ] = 0,
+    no_open: Annotated[  # noqa: FBT002 - Typer exposes this as a flag.
+        bool,
+        typer.Option("--no-open"),
+    ] = False,
+) -> None:
+    """Run the loopback-only reciprocal AWS operator console."""
+    try:
+        from cai_verify.ui import run_console  # noqa: PLC0415 - optional extra.
+
+        run_console(
+            evidence_root=evidence_root,
+            port=port,
+            open_browser=not no_open,
+        )
+    except Exception:  # noqa: BLE001 - startup diagnostics must stay private.
+        typer.echo(
+            "local console failed; install cai-verify[aws,ui]",
+            err=True,
+        )
+        raise typer.Exit(code=int(CliExitCode.EXECUTION_ERROR)) from None
+
+
 @app.command("verify-evidence")
 def verify_evidence(
     run_directory: Annotated[

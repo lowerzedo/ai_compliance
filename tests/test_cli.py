@@ -367,3 +367,62 @@ def test_local_run_failure_redacts_exception_details(
     assert result.stdout == ""
     assert result.stderr == "local run failed\n"
     assert secret not in result.output
+
+
+def test_ui_command_forwards_only_loopback_launch_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The CLI exposes no host override and honors automation browser suppression."""
+    calls: list[tuple[Path, int, bool]] = []
+
+    def run_console(
+        *,
+        evidence_root: Path,
+        port: int,
+        open_browser: bool,
+    ) -> None:
+        calls.append((evidence_root, port, open_browser))
+
+    monkeypatch.setattr("cai_verify.ui.run_console", run_console)
+
+    result = runner.invoke(
+        app,
+        [
+            "ui",
+            "--evidence-root",
+            str(tmp_path),
+            "--port",
+            "43123",
+            "--no-open",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == ""
+    assert calls == [(tmp_path.resolve(), 43123, False)]
+    help_result = runner.invoke(app, ["ui", "--help"])
+    assert help_result.exit_code == 0
+    assert "--evidence-root" in help_result.stdout
+    assert "--port" in help_result.stdout
+    assert "--no-open" in help_result.stdout
+    assert "--host" not in help_result.stdout
+
+
+def test_ui_command_redacts_optional_dependency_and_runtime_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Browser, bind, and optional-extra details collapse to one diagnostic."""
+    secret = "synthetic-ui-launch-secret-must-not-leak"  # noqa: S105
+
+    def fail_console(**_kwargs: object) -> None:
+        raise OSError(secret)
+
+    monkeypatch.setattr("cai_verify.ui.run_console", fail_console)
+
+    result = runner.invoke(app, ["ui", "--no-open"])
+
+    assert result.exit_code == int(CliExitCode.EXECUTION_ERROR)
+    assert result.stdout == ""
+    assert result.stderr == "local console failed; install cai-verify[aws,ui]\n"
+    assert secret not in result.output

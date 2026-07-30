@@ -1,0 +1,46 @@
+{
+  "aggregateStatus": "PASS",
+  "exitCode": 0,
+  "report": {
+    "results": [
+      {
+        "direction": "direction-01",
+        "limitations": [
+          "The test uses synthetic paired canaries.",
+          "The retrieval evidence is application-reported.",
+          "A compromised or incorrectly instrumented application can report false facts.",
+          "One passing scenario does not prove isolation for every identity, query, document, cache, memory layer, or production path.",
+          "The result supports a technical assessment and does not establish compliance."
+        ],
+        "observed": {
+          "baseline_canary_observed": true,
+          "boundary_canary_observed": false,
+          "normalized_evidence_state": "isolated_retrieval_observed",
+          "retrieval_path_exercised": true,
+          "retrieved_item_count": 1,
+          "undeclared_synthetic_marker_observed": false
+        },
+        "status": "PASS"
+      },
+      {
+        "direction": "direction-02",
+        "limitations": [
+          "The test uses synthetic paired canaries.",
+          "The retrieval evidence is application-reported.",
+          "A compromised or incorrectly instrumented application can report false facts.",
+          "One passing scenario does not prove isolation for every identity, query, document, cache, memory layer, or production path.",
+          "The result supports a technical assessment and does not establish compliance."
+        ],
+        "observed": {
+          "baseline_canary_observed": true,
+          "boundary_canary_observed": false,
+          "normalized_evidence_state": "isolated_retrieval_observed",
+          "retrieval_path_exercised": true,
+          "retrieved_item_count": 1,
+          "undeclared_synthetic_marker_observed": false
+        },
+        "status": "PASS"
+      }
+    ]
+  }
+}

@@ -23,6 +23,8 @@ _AWS_EXAMPLE_FILENAMES = (
     "reciprocal-retrieval-policy.json",
     "reciprocal-retrieval-suite.json",
 )
+_UI_GENERATED_DIRECTORIES = ("dist", "node_modules")
+_UI_STATIC_DIRECTORY = PROJECT_ROOT / "src/cai_verify/ui/static"
 
 
 def _only_artifact(pattern: str) -> Path:
@@ -33,8 +35,8 @@ def _only_artifact(pattern: str) -> Path:
     return artifacts[0].resolve(strict=True)
 
 
-def main() -> None:  # noqa: C901, PLR0915 - one linear release-gate inventory.
-    """Inspect distributions and smoke-test base and AWS-extra installations."""
+def main() -> None:  # noqa: C901, PLR0912, PLR0915 - linear release inventory.
+    """Inspect distributions and smoke-test base, AWS, and UI installations."""
     wheel = _only_artifact("*.whl")
     source_distribution = _only_artifact("*.tar.gz")
     _validate_inventory(wheel, source_distribution)
@@ -170,15 +172,76 @@ def main() -> None:  # noqa: C901, PLR0915 - one linear release-gate inventory.
         message = "AWS-extra import emitted unexpected output"
         raise RuntimeError(message)
 
+    ui_requirement = f"cai-verify[ui] @ {wheel.as_uri()}"
+    ui_import = _run(
+        [
+            uv,
+            "run",
+            "--isolated",
+            "--no-project",
+            "--with",
+            ui_requirement,
+            "python",
+            "-c",
+            (
+                "from importlib.resources import files; "
+                "from cai_verify.ui import create_console_app; "
+                "asset = files('cai_verify.ui').joinpath('static/index.html'); "
+                "assert asset.is_file(); "
+                "assert callable(create_console_app)"
+            ),
+        ],
+        label="UI-extra packaged-asset import",
+    )
+    if ui_import.stdout:
+        message = "UI-extra import emitted unexpected output"
+        raise RuntimeError(message)
+
+    combined_requirement = f"cai-verify[aws,ui] @ {wheel.as_uri()}"
+    combined_help = _run(
+        [
+            uv,
+            "run",
+            "--isolated",
+            "--no-project",
+            "--with",
+            combined_requirement,
+            "cai-verify",
+            "ui",
+            "--help",
+        ],
+        label="combined AWS-and-UI operator help",
+        environment=aws_environment,
+    )
+    if not all(
+        option in combined_help.stdout
+        for option in (b"--evidence-root", b"--port", b"--no-open")
+    ):
+        message = "combined AWS-and-UI install omitted console launch options"
+        raise RuntimeError(message)
+
     sys.stdout.write(
         "Distribution validation passed: "
-        f"cai-verify {expected_version}, schemas, base wheel, AWS extra, sdist\n"
+        f"cai-verify {expected_version}, schemas, UI assets, "
+        "base wheel, AWS extra, UI extra, combined operator install, sdist\n"
     )
 
 
-def _validate_inventory(wheel: Path, source_distribution: Path) -> None:
+def _validate_inventory(  # noqa: C901, PLR0912 - explicit archive checks stay visible.
+    wheel: Path,
+    source_distribution: Path,
+) -> None:
+    ui_assets = _ui_asset_inventory()
     with zipfile.ZipFile(wheel) as archive:
         wheel_names = set(archive.namelist())
+        for relative_path, expected in ui_assets.items():
+            archive_path = f"cai_verify/ui/static/{relative_path}"
+            if archive_path not in wheel_names:
+                message = f"wheel omitted packaged UI asset {relative_path}"
+                raise RuntimeError(message)
+            if archive.read(archive_path) != expected:
+                message = f"wheel UI asset differs from source {relative_path}"
+                raise RuntimeError(message)
     for filename in _SCHEMA_FILENAMES:
         if f"cai_verify/schemas/{filename}" not in wheel_names:
             message = f"wheel omitted packaged schema {filename}"
@@ -186,14 +249,87 @@ def _validate_inventory(wheel: Path, source_distribution: Path) -> None:
 
     with tarfile.open(source_distribution, mode="r:gz") as archive:
         source_names = set(archive.getnames())
-    for filename in _SCHEMA_FILENAMES:
-        if not any(name.endswith(f"/schemas/{filename}") for name in source_names):
-            message = f"source distribution omitted schema {filename}"
+        if any(
+            "/ui/node_modules/" in name or "/ui/dist/" in name for name in source_names
+        ):
+            message = "source distribution included generated frontend directories"
             raise RuntimeError(message)
-    for filename in _AWS_EXAMPLE_FILENAMES:
-        if not any(name.endswith(f"/examples/aws/{filename}") for name in source_names):
-            message = f"source distribution omitted AWS example {filename}"
-            raise RuntimeError(message)
+        for relative_path, expected in ui_assets.items():
+            suffix = f"/src/cai_verify/ui/static/{relative_path}"
+            matches = [name for name in source_names if name.endswith(suffix)]
+            if len(matches) != 1:
+                message = (
+                    "source distribution omitted or duplicated UI asset "
+                    f"{relative_path}"
+                )
+                raise RuntimeError(message)
+            extracted = archive.extractfile(matches[0])
+            if extracted is None or extracted.read() != expected:
+                message = (
+                    f"source distribution UI asset differs from source {relative_path}"
+                )
+                raise RuntimeError(message)
+        for filename in _SCHEMA_FILENAMES:
+            if not any(name.endswith(f"/schemas/{filename}") for name in source_names):
+                message = f"source distribution omitted schema {filename}"
+                raise RuntimeError(message)
+        for filename in _AWS_EXAMPLE_FILENAMES:
+            if not any(
+                name.endswith(f"/examples/aws/{filename}") for name in source_names
+            ):
+                message = f"source distribution omitted AWS example {filename}"
+                raise RuntimeError(message)
+        for relative_path, expected in _ui_source_inventory().items():
+            suffix = f"/ui/{relative_path}"
+            matches = [name for name in source_names if name.endswith(suffix)]
+            if len(matches) != 1:
+                message = (
+                    "source distribution omitted or duplicated front-end source "
+                    f"{relative_path}"
+                )
+                raise RuntimeError(message)
+            extracted = archive.extractfile(matches[0])
+            if extracted is None or extracted.read() != expected:
+                message = (
+                    "source distribution front-end source differs from source "
+                    f"{relative_path}"
+                )
+                raise RuntimeError(message)
+
+
+def _ui_asset_inventory() -> dict[str, bytes]:
+    if not _UI_STATIC_DIRECTORY.is_dir():
+        message = "packaged UI asset directory is unavailable"
+        raise RuntimeError(message)
+    inventory = {
+        path.relative_to(_UI_STATIC_DIRECTORY).as_posix(): path.read_bytes()
+        for path in sorted(_UI_STATIC_DIRECTORY.rglob("*"))
+        if path.is_file() and not path.is_symlink()
+    }
+    if "index.html" not in inventory or any(
+        path.endswith(".map") for path in inventory
+    ):
+        message = "packaged UI asset inventory is invalid"
+        raise RuntimeError(message)
+    return inventory
+
+
+def _ui_source_inventory() -> dict[str, bytes]:
+    source_root = PROJECT_ROOT / "ui"
+    if not source_root.is_dir():
+        message = "front-end source directory is unavailable"
+        raise RuntimeError(message)
+    return {
+        path.relative_to(source_root).as_posix(): path.read_bytes()
+        for path in sorted(source_root.rglob("*"))
+        if path.is_file()
+        and not path.is_symlink()
+        and not path.name.startswith(".")
+        and not any(
+            part in _UI_GENERATED_DIRECTORIES
+            for part in path.relative_to(source_root).parts
+        )
+    }
 
 
 def _run(

@@ -32,6 +32,9 @@ jobs:
           - typecheck
           - test
           - docs
+          - ui-format-check
+          - ui-typecheck
+          - ui-test
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -45,6 +48,15 @@ jobs:
           version: "0.11.19"
       - name: Install locked dependencies
         run: uv sync --all-extras --dev
+      - name: Install Node.js
+        if: startsWith(matrix.check, 'ui-')
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.12.0"
+          package-manager-cache: false
+      - name: Install locked frontend dependencies
+        if: startsWith(matrix.check, 'ui-')
+        run: npm --prefix ui ci
       - name: Run ${{ matrix.check }} check
         run: make ${{ matrix.check }}
 
@@ -65,6 +77,13 @@ jobs:
           version: "0.11.19"
       - name: Install locked dependencies
         run: uv sync --all-extras --dev
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.12.0"
+          package-manager-cache: false
+      - name: Install locked frontend dependencies
+        run: npm --prefix ui ci
       - name: Build and validate distributions
         run: make build
       - name: Upload distributions
@@ -91,5 +110,12 @@ jobs:
           version: "0.11.19"
       - name: Install locked dependencies
         run: uv sync --all-extras --dev
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.12.0"
+          package-manager-cache: false
+      - name: Install locked frontend dependencies
+        run: npm --prefix ui ci
       - name: Audit locked dependencies
         run: make audit

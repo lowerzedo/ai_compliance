@@ -1,6 +1,6 @@
 """Strict, versioned verification-suite configuration models."""
 
-from cai_verify.config.loading import MAX_SUITE_BYTES, load_suite
+from cai_verify.config.loading import MAX_SUITE_BYTES, load_suite, load_suite_bytes
 from cai_verify.config.models import (
     SUITE_SCHEMA_ID,
     SUITE_SCHEMA_VERSION,
@@ -86,5 +86,6 @@ __all__ = [
     "UnauthorizedIdentityAssertion",
     "VerificationSuite",
     "load_suite",
+    "load_suite_bytes",
     "verification_suite_json_schema",
 ]

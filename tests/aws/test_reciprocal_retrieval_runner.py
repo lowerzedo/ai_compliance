@@ -22,6 +22,7 @@ from cai_verify.aws import (
     AwsReciprocalRetrievalRunFailureCode,
     AwsReciprocalRetrievalRunOptions,
     AwsReciprocalRetrievalRunResult,
+    AwsReciprocalRetrievalRunStage,
     AwsScopedIdentity,
     AwsSession,
     AwsSessionFactory,
@@ -713,6 +714,73 @@ def test_aggregate_semantics_preserve_two_normalized_directions(
     assert len(runtime.logs.calls) == _DIRECTION_COUNT
     assert verify_run_integrity(result.evidence_path).valid
     assert (result.evidence_path / "manifest.json").is_file()
+
+
+def test_optional_progress_observer_emits_only_fixed_ordered_stages(
+    tmp_path: Path,
+) -> None:
+    """Successful coordination exposes no identifiers or runtime diagnostics."""
+    stages: list[AwsReciprocalRetrievalRunStage] = []
+
+    result = _run(
+        tmp_path,
+        "progress-success",
+        _runtime(("pass", "pass")),
+        progress=stages.append,
+    )
+
+    assert result.status is AssertionStatus.PASS
+    assert stages == [
+        AwsReciprocalRetrievalRunStage.VALIDATION,
+        AwsReciprocalRetrievalRunStage.AUTHORIZATION,
+        AwsReciprocalRetrievalRunStage.IDENTITY_ACQUISITION,
+        AwsReciprocalRetrievalRunStage.DIRECTION_ONE,
+        AwsReciprocalRetrievalRunStage.DIRECTION_TWO,
+        AwsReciprocalRetrievalRunStage.EVALUATION,
+        AwsReciprocalRetrievalRunStage.FINALIZATION,
+        AwsReciprocalRetrievalRunStage.INTEGRITY_VERIFICATION,
+        AwsReciprocalRetrievalRunStage.COMPLETE,
+    ]
+
+
+def test_progress_observer_failure_is_advisory_and_run_failure_is_fixed(
+    tmp_path: Path,
+) -> None:
+    """Observer exceptions cannot alter execution; run errors end at failed."""
+    emitted: list[AwsReciprocalRetrievalRunStage] = []
+
+    def observer(stage: AwsReciprocalRetrievalRunStage) -> None:
+        emitted.append(stage)
+        if stage is AwsReciprocalRetrievalRunStage.AUTHORIZATION:
+            message = "observer diagnostic must stay private"
+            raise RuntimeError(message)
+
+    result = _run(
+        tmp_path,
+        "progress-observer-error",
+        _runtime(("pass", "pass")),
+        progress=observer,
+    )
+    assert result.status is AssertionStatus.PASS
+    assert emitted[-1] is AwsReciprocalRetrievalRunStage.COMPLETE
+
+    failed: list[AwsReciprocalRetrievalRunStage] = []
+    with pytest.raises(AwsReciprocalRetrievalRunError):
+        run_aws_reciprocal_retrieval(
+            _suite(),
+            AwsReciprocalRetrievalRunOptions(
+                run_id="progress-invalid",
+                scenario_id="missing",
+                evidence_root=tmp_path,
+                execution_policy=load_aws_execution_policy(_POLICY_PATH),
+                environment=_ENVIRONMENT,
+                progress=failed.append,
+            ),
+        )
+    assert failed == [
+        AwsReciprocalRetrievalRunStage.VALIDATION,
+        AwsReciprocalRetrievalRunStage.FAILED,
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1485,6 +1553,7 @@ def _run(  # noqa: PLR0913 - injected seams keep contract tests network-isolated
     session_factory: AwsSessionFactory | None = None,
     monotonic: Callable[[], float] | None = None,
     environment: Mapping[str, str] | None = None,
+    progress: Callable[[AwsReciprocalRetrievalRunStage], None] | None = None,
 ) -> AwsReciprocalRetrievalRunResult:
     return run_aws_reciprocal_retrieval(
         _suite(),
@@ -1500,6 +1569,7 @@ def _run(  # noqa: PLR0913 - injected seams keep contract tests network-isolated
             monotonic=monotonic or runtime.monotonic,
             action_adapter=action_adapter or runtime.action_adapter,
             probe_adapter=probe_adapter or runtime.probe_adapter,
+            progress=progress,
         ),
     )
 

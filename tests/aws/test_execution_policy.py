@@ -21,6 +21,7 @@ from cai_verify.aws import (
     authorize_aws_execution,
     aws_execution_policy_json_schema,
     load_aws_execution_policy,
+    load_aws_execution_policy_bytes,
     run_aws_doctor,
     run_aws_retrieval_chain,
     run_retrieval_doctor,
@@ -156,6 +157,28 @@ def test_bounded_loader_accepts_one_exact_policy_at_the_size_limit(
     )
     assert policy.allow_current_identity is False
     assert policy.cloudwatch_log_groups == (_LOG_GROUP,)
+
+
+def test_path_and_byte_loaders_share_the_exact_policy_contract() -> None:
+    """The console upload and CLI path return the same strict policy model."""
+    assert load_aws_execution_policy_bytes(_policy_bytes()) == _policy()
+
+
+def test_byte_policy_loader_rejects_non_bytes_and_oversized_content() -> None:
+    """The upload seam retains the existing fixed 64 KiB boundary."""
+    with pytest.raises(AwsExecutionPolicyError) as wrong_type:
+        load_aws_execution_policy_bytes("{}")  # type: ignore[arg-type]
+    _assert_fixed_error(
+        wrong_type.value,
+        AwsExecutionPolicyFailureCode.INVALID_EXECUTION_POLICY,
+    )
+
+    with pytest.raises(AwsExecutionPolicyError) as oversized:
+        load_aws_execution_policy_bytes(b" " * (MAX_AWS_EXECUTION_POLICY_BYTES + 1))
+    _assert_fixed_error(
+        oversized.value,
+        AwsExecutionPolicyFailureCode.INVALID_EXECUTION_POLICY,
+    )
 
 
 @pytest.mark.parametrize(

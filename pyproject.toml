@@ -19,6 +19,10 @@ dependencies = [
 aws = [
   "boto3>=1.40,<2",
 ]
+ui = [
+  "fastapi>=0.141.1,<0.142",
+  "uvicorn>=0.52,<0.53",
+]
 
 [project.scripts]
 cai-verify = "cai_verify.cli:app"
@@ -26,6 +30,7 @@ cai-verify = "cai_verify.cli:app"
 [dependency-groups]
 dev = [
   "hatchling>=1.27,<2",
+  "httpx>=0.28,<1",
   "mdformat>=0.7.22,<1",
   "mdformat-gfm>=0.4.1,<1",
   "mypy>=1.19,<2",
@@ -46,6 +51,11 @@ include = [
   "/pyproject.toml",
   "/schemas",
   "/src/cai_verify",
+  "/ui",
+]
+exclude = [
+  "/ui/dist",
+  "/ui/node_modules",
 ]
 
 [tool.hatch.build.targets.wheel]

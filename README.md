@@ -11,6 +11,10 @@ security engineer who already has two least-privilege requester roles, one
 separate read-only evidence role, two pre-seeded synthetic canaries, and an
 application that emits the required correlated retrieval event.
 
+An optional local security console presents that same fixed workflow in a
+browser on `127.0.0.1`. It does not add another runner, assertion, remote API,
+database, authentication service, or compliance claim.
+
 The repository also contains configuration models, adapters, evaluators,
 doctors, diagnostic building blocks, and a local synthetic demonstration that
 are not all composed into public-alpha runners. A suite being schema-valid
@@ -263,6 +267,11 @@ The same orchestration is available through
 `AwsReciprocalRetrievalRunResult`, and
 `run_aws_reciprocal_retrieval`.
 
+`AwsReciprocalRetrievalRunOptions` also accepts an optional fixed-enum progress
+observer for the local console. Omitting it preserves the previous API and
+runner behavior. Observer failures are ignored, and progress values contain no
+target identifiers, correlations, credentials, or diagnostics.
+
 The selected scenario must contain exactly two non-mutating `execute-api`
 actions, two CloudWatch Logs probes requesting only `retrievalCanary`, and two
 `retrievalBoundary` assertions. It must use two distinct effective requester
@@ -333,6 +342,81 @@ failed unfinalized runs are preserved without `manifest.json`; they are never
 resumed, adopted, overwritten, automatically deleted, or reported complete.
 Operators must inspect and securely preserve or remove those abandoned
 directories according to local policy.
+
+## Local security console
+
+Install both optional AWS and UI support:
+
+```console
+python -m pip install "cai-verify[aws,ui]"
+```
+
+From a repository checkout, use the locked development environment:
+
+```console
+uv sync --extra aws --extra ui --dev
+```
+
+Start the console:
+
+```console
+cai-verify ui --evidence-root .cai-verify/runs
+```
+
+The server binds only to `127.0.0.1` and selects an ephemeral port by default.
+Use `--port PORT` to select a loopback port or `--no-open` to leave browser
+startup to the operator. With `--no-open`, the command prints the one-use
+loopback launch URL to standard output for the operator or local automation;
+handle that URL as a short-lived local capability. There is no configurable
+host or remote mode.
+
+Prefix the launch command with `uv run` when using the repository environment.
+
+The console supports the complete reciprocal public-alpha path:
+
+1. load one bounded duplicate-free suite JSON file and one independently
+   bounded execution-policy JSON file;
+1. review the exact validated plan with sensitive configuration masked;
+1. run the existing AWS identity and retrieval readiness checks;
+1. explicitly confirm and start one fixed reciprocal run;
+1. inspect both assertion results, the conservative aggregate, and fixed
+   limitations; and
+1. browse bounded local evidence history after manifest verification.
+
+Configuration remains in bounded process memory and is discarded when the
+console exits. The browser does not store configuration, credentials, canary
+values, environment values, correlations, or evidence in local storage,
+session storage, IndexedDB, or data-bearing cookies. An explicit temporary
+reveal can show only allowlisted account, endpoint, role ARN, log-group, and
+environment-reference names. It never reveals the referenced environment
+values. The masked review covers both the selected reciprocal slice and every
+role, action path, and log group authorized by the uploaded policy, including
+authorizations that the selected slice does not use. Temporary reveal requests
+are bound to that review's exact configuration revision.
+
+Each console process creates one browser session through a one-use secret in a
+URL fragment, then uses a host-only HttpOnly `SameSite=Strict` cookie and an
+in-memory CSRF value. Exact `Host` and `Origin` checks, strict same-origin
+response headers, and the loopback-only bind reduce cross-origin request and
+DNS-rebinding risk. They are not remote authentication and do not protect
+against a compromised local account, browser, process, or filesystem.
+
+Only one run may be active. The console calls the existing Python runner in
+process and adds no cancellation or runner-level retry. A stopped process may
+therefore leave the same intentionally unfinalized evidence directory as an
+interrupted CLI run.
+
+Evidence history is not a generic artifact browser. It verifies finalized
+manifests before reading only the fixed reciprocal `run.json` and public
+`reports/report.json` shapes, classifies invalid or unfinalized runs, and
+returns no raw evidence artifacts. A verified bundle remains unsigned:
+manifest integrity is not creator authenticity or protection against complete
+bundle replacement.
+
+The localhost API is internal to the console and is not a supported remote
+integration API. The protected live-AWS public-alpha release gate remains
+pending, and using the console does not establish tenant isolation or legal,
+regulatory, or framework compliance.
 
 ## AWS SigV4 application actions
 
@@ -643,13 +727,15 @@ gate.
 - [uv](https://docs.astral.sh/uv/) 0.11.19 or a compatible 0.11 release
 - GNU Make
 - Python 3.14 (uv can install the version selected by `.python-version`)
+- Node 22.12 or newer for front-end contributors only; packaged-console
+  operators do not need Node
 
 ## Local setup
 
-Create the development environment and install the project:
+Create the locked Python and front-end development environments:
 
 ```console
-uv sync --all-extras --dev
+make sync
 ```
 
 Run the CLI in the managed environment:
@@ -677,16 +763,17 @@ internet or AWS.
 
 ## Development commands
 
-| Command          | Purpose                                              |
-| ---------------- | ---------------------------------------------------- |
-| `make format`    | Format Python and Markdown and apply safe Ruff fixes |
-| `make lint`      | Check Python formatting and lint rules               |
-| `make typecheck` | Run mypy in strict mode                              |
-| `make test`      | Run pytest with network access disabled              |
-| `make docs`      | Check Markdown formatting                            |
-| `make build`     | Build and validate the source and wheel artifacts    |
-| `make audit`     | Audit locked dependencies for known vulnerabilities  |
-| `make check`     | Run lint, types, tests, docs, and package validation |
+| Command          | Purpose                                                        |
+| ---------------- | -------------------------------------------------------------- |
+| `make format`    | Format Python, Markdown, and front-end sources                 |
+| `make lint`      | Check Python formatting and lint rules                         |
+| `make typecheck` | Run mypy in strict mode                                        |
+| `make test`      | Run pytest with network access disabled                        |
+| `make docs`      | Check Markdown formatting                                      |
+| `make ui-build`  | Rebuild the UI and compare it with committed packaged assets   |
+| `make build`     | Build and validate the source and wheel artifacts              |
+| `make audit`     | Audit locked Python and npm dependencies                       |
+| `make check`     | Run Python/UI lint, types, tests, docs, and package validation |
 
 ## License
 

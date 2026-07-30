@@ -264,6 +264,19 @@ def load_aws_execution_policy(
         policy_path = Path(path)
         with policy_path.open("rb") as stream:
             content = stream.read(MAX_AWS_EXECUTION_POLICY_BYTES + 1)
+        return load_aws_execution_policy_bytes(content)
+    except AwsExecutionPolicyError:
+        raise
+    except Exception:  # noqa: BLE001 - paths and filesystem details are sensitive.
+        raise AwsExecutionPolicyError(
+            AwsExecutionPolicyFailureCode.INVALID_EXECUTION_POLICY
+        ) from None
+
+
+def load_aws_execution_policy_bytes(content: bytes) -> AwsExecutionPolicy:
+    """Load bounded policy bytes without retaining or exposing their contents."""
+    try:
+        _require_policy_content(content)
         _require_policy_size(content)
         utf8 = content.decode("utf-8")
         decoded = json.loads(
@@ -272,10 +285,17 @@ def load_aws_execution_policy(
             parse_constant=_reject_json_constant,
         )
         return AwsExecutionPolicy.model_validate(decoded)
-    except Exception:  # noqa: BLE001 - paths, values, and parser text are sensitive.
+    except Exception:  # noqa: BLE001 - values and parser text are sensitive.
         raise AwsExecutionPolicyError(
             AwsExecutionPolicyFailureCode.INVALID_EXECUTION_POLICY
         ) from None
+
+
+def _require_policy_content(content: object) -> bytes:
+    if type(content) is not bytes:
+        message = "execution-policy content must be bytes"
+        raise TypeError(message)
+    return content
 
 
 def authorize_aws_execution(  # noqa: C901, PLR0912 - exact checks stay explicit.

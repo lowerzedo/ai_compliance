@@ -33,6 +33,7 @@ from cai_verify.aws.execution_policy import (
     authorize_aws_execution,
     aws_execution_policy_json_schema,
     load_aws_execution_policy,
+    load_aws_execution_policy_bytes,
 )
 from cai_verify.aws.identity import (
     AssumedRoleAwsIdentityProvider,
@@ -51,7 +52,9 @@ from cai_verify.aws.reciprocal_retrieval_runner import (
     AwsReciprocalRetrievalRunFailureCode,
     AwsReciprocalRetrievalRunOptions,
     AwsReciprocalRetrievalRunResult,
+    AwsReciprocalRetrievalRunStage,
     run_aws_reciprocal_retrieval,
+    validated_aws_reciprocal_retrieval_slice,
 )
 from cai_verify.aws.retrieval_doctor import (
     MAX_RETRIEVAL_ASSERTIONS,
@@ -105,6 +108,7 @@ __all__ = [
     "AwsReciprocalRetrievalRunFailureCode",
     "AwsReciprocalRetrievalRunOptions",
     "AwsReciprocalRetrievalRunResult",
+    "AwsReciprocalRetrievalRunStage",
     "AwsRetrievalRunError",
     "AwsRetrievalRunFailureCode",
     "AwsRetrievalRunOptions",
@@ -129,8 +133,10 @@ __all__ = [
     "authorize_aws_execution",
     "aws_execution_policy_json_schema",
     "load_aws_execution_policy",
+    "load_aws_execution_policy_bytes",
     "run_aws_doctor",
     "run_aws_reciprocal_retrieval",
     "run_aws_retrieval_chain",
     "run_retrieval_doctor",
+    "validated_aws_reciprocal_retrieval_slice",
 ]

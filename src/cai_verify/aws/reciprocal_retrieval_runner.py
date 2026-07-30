@@ -96,6 +96,7 @@ _FRESHNESS_PATTERN = re.compile(
 )
 _DIGEST_PREFIX_PATTERN = re.compile(r"[0-9a-f]{16}\Z")
 _RECIPROCAL_CHAIN_COUNT = 2
+_RECIPROCAL_IDENTITY_COUNT = 3
 _RECIPROCAL_ARTIFACT_COUNT = 9
 
 
@@ -110,6 +111,21 @@ class AwsReciprocalRetrievalRunFailureCode(StrEnum):
     EVIDENCE_RUN_COLLISION = "evidence_run_collision"
     EVIDENCE_PERSISTENCE_FAILED = "evidence_persistence_failed"
     INTEGRITY_VERIFICATION_FAILED = "integrity_verification_failed"
+
+
+class AwsReciprocalRetrievalRunStage(StrEnum):
+    """Fixed non-sensitive progress stages for operator-facing coordination."""
+
+    VALIDATION = "validation"
+    AUTHORIZATION = "authorization"
+    IDENTITY_ACQUISITION = "identity_acquisition"
+    DIRECTION_ONE = "direction_one"
+    DIRECTION_TWO = "direction_two"
+    EVALUATION = "evaluation"
+    FINALIZATION = "finalization"
+    INTEGRITY_VERIFICATION = "integrity_verification"
+    COMPLETE = "complete"
+    FAILED = "failed"
 
 
 class AwsReciprocalRetrievalRunError(RuntimeError):
@@ -142,6 +158,10 @@ class AwsReciprocalRetrievalRunOptions:
     monotonic: Callable[[], float] = field(default=time.monotonic, repr=False)
     action_adapter: AwsSigV4ActionAdapter | None = field(default=None, repr=False)
     probe_adapter: CloudWatchLogsProbeAdapter | None = field(
+        default=None,
+        repr=False,
+    )
+    progress: Callable[[AwsReciprocalRetrievalRunStage], None] | None = field(
         default=None,
         repr=False,
     )
@@ -229,7 +249,65 @@ class _SchedulingBudget:
         self.last_checked_at = current
 
 
-def run_aws_reciprocal_retrieval(  # noqa: C901, PLR0912, PLR0915
+def run_aws_reciprocal_retrieval(
+    suite: VerificationSuite,
+    options: AwsReciprocalRetrievalRunOptions,
+) -> AwsReciprocalRetrievalRunResult:
+    """Run the reciprocal path while emitting only fixed safe progress stages."""
+    _notify_progress(options, AwsReciprocalRetrievalRunStage.VALIDATION)
+    try:
+        return _run_aws_reciprocal_retrieval(suite, options)
+    except Exception:
+        _notify_progress(options, AwsReciprocalRetrievalRunStage.FAILED)
+        raise
+
+
+def validated_aws_reciprocal_retrieval_slice(
+    suite: VerificationSuite,
+    scenario_id: str,
+) -> VerificationSuite:
+    """Return only the exact bounded identities and scenario used by this runner."""
+    try:
+        selected = _selected_reciprocal(suite, scenario_id)
+        identities = tuple(
+            sorted(
+                {
+                    identity.id: identity
+                    for identity in (
+                        selected.chains[0].requester_identity,
+                        selected.chains[1].requester_identity,
+                        selected.evidence_identity,
+                    )
+                }.values(),
+                key=lambda identity: identity.id,
+            )
+        )
+        if len(identities) != _RECIPROCAL_IDENTITY_COUNT:
+            _invalid_configuration()
+        identity_ids = {identity.id for identity in identities}
+        scenario_identity = (
+            selected.scenario.identity_ref
+            if selected.scenario.identity_ref in identity_ids
+            else selected.chains[0].requester_identity.id
+        )
+        scenario = selected.scenario.model_copy(
+            update={"identity_ref": scenario_identity}
+        )
+        return suite.model_copy(
+            update={
+                "identities": identities,
+                "scenarios": (scenario,),
+            }
+        )
+    except AwsReciprocalRetrievalRunError:
+        raise
+    except Exception:  # noqa: BLE001 - configuration details stay redacted.
+        raise AwsReciprocalRetrievalRunError(
+            AwsReciprocalRetrievalRunFailureCode.INVALID_CONFIGURATION
+        ) from None
+
+
+def _run_aws_reciprocal_retrieval(  # noqa: C901, PLR0912, PLR0915
     suite: VerificationSuite,
     options: AwsReciprocalRetrievalRunOptions,
 ) -> AwsReciprocalRetrievalRunResult:
@@ -240,6 +318,7 @@ def run_aws_reciprocal_retrieval(  # noqa: C901, PLR0912, PLR0915
             selected,
             environment=options.environment,
         )
+        _notify_progress(options, AwsReciprocalRetrievalRunStage.AUTHORIZATION)
         authorize_aws_execution(
             options.execution_policy,
             target=suite.target,
@@ -318,6 +397,7 @@ def run_aws_reciprocal_retrieval(  # noqa: C901, PLR0912, PLR0915
                 probe_adapter=probe_adapter,
                 environment=resolved_environment,
             )
+            _notify_progress(options, AwsReciprocalRetrievalRunStage.EVALUATION)
             assertion_results = _evaluate_reciprocal(
                 selected,
                 action_results=action_results,
@@ -347,6 +427,7 @@ def run_aws_reciprocal_retrieval(  # noqa: C901, PLR0912, PLR0915
                 target_environment=suite.target.environment.value,
                 target_region=selected.region,
             )
+            _notify_progress(options, AwsReciprocalRetrievalRunStage.FINALIZATION)
             phase = "persistence"
             _write_evidence(
                 run,
@@ -374,6 +455,10 @@ def run_aws_reciprocal_retrieval(  # noqa: C901, PLR0912, PLR0915
         raise AwsReciprocalRetrievalRunError(code) from None
 
     try:
+        _notify_progress(
+            options,
+            AwsReciprocalRetrievalRunStage.INTEGRITY_VERIFICATION,
+        )
         verification = verify_run_integrity(run.path)
     except Exception:  # noqa: BLE001 - integrity implementation details are private.
         raise AwsReciprocalRetrievalRunError(
@@ -383,6 +468,7 @@ def run_aws_reciprocal_retrieval(  # noqa: C901, PLR0912, PLR0915
         raise AwsReciprocalRetrievalRunError(
             AwsReciprocalRetrievalRunFailureCode.INTEGRITY_VERIFICATION_FAILED
         )
+    _notify_progress(options, AwsReciprocalRetrievalRunStage.COMPLETE)
     return AwsReciprocalRetrievalRunResult(
         run_id=options.run_id,
         scenario_id=selected.scenario.id,
@@ -393,6 +479,21 @@ def run_aws_reciprocal_retrieval(  # noqa: C901, PLR0912, PLR0915
         terminal_report=terminal_report,
         json_report=json_report,
     )
+
+
+def _notify_progress(
+    options: AwsReciprocalRetrievalRunOptions,
+    stage: AwsReciprocalRetrievalRunStage,
+) -> None:
+    """Notify trusted coordination code without affecting verifier semantics."""
+    observer = options.progress
+    if observer is None:
+        return
+    try:
+        observer(stage)
+    except Exception:  # noqa: BLE001 - advisory observers cannot affect a run.
+        # Progress is advisory. Observer failure cannot alter execution or evidence.
+        return
 
 
 def _selected_reciprocal(
@@ -600,6 +701,10 @@ def _execute_reciprocal(  # noqa: PLR0913 - exact runtime inputs stay explicit.
     leases: dict[str, AwsScopedIdentity] = {}
     budget = _SchedulingBudget.start(options.monotonic)
     try:
+        _notify_progress(
+            options,
+            AwsReciprocalRetrievalRunStage.IDENTITY_ACQUISITION,
+        )
         for identity in identity_order:
             budget.check()
             lease = _acquire_identity(
@@ -629,6 +734,14 @@ def _execute_reciprocal(  # noqa: PLR0913 - exact runtime inputs stay explicit.
         action_artifacts: dict[str, bytes] = {}
         probe_artifacts: dict[str, bytes] = {}
         for position, chain in enumerate(selected.chains):
+            _notify_progress(
+                options,
+                (
+                    AwsReciprocalRetrievalRunStage.DIRECTION_ONE
+                    if position == 0
+                    else AwsReciprocalRetrievalRunStage.DIRECTION_TWO
+                ),
+            )
             requester_lease = leases[chain.requester_identity.id]
             budget.check()
             try:
