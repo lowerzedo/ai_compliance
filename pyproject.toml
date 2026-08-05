@@ -21,13 +21,13 @@ cai-verify = "cai_verify.cli:app"
 dev = [
   "hatchling>=1.27,<2",
   "mdformat>=0.7.22,<1",
-  "mdformat-gfm>=0.4.1,<1",
-  "mypy>=1.19,<2",
+  "mdformat-gfm>=1.0.0,<2",
+  "mypy>=2.3.0,<3",
   "pip-audit>=2.9,<3",
   "pytest>=9,<10",
   "pytest-socket>=0.7,<1",
-  "ruff>=0.14,<1",
-  "twine>=6.2,<7",
+  "ruff>=0.16.1,<1",
+  "twine>=7.0.0,<8",
 ]
 
 [tool.hatch.build.targets.sdist]
