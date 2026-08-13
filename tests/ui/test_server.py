@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass, replace
@@ -95,13 +96,14 @@ class _ConsoleFixture:
     static_directory: Path
 
 
-def _build_console(
+def _build_console(  # noqa: PLR0913 - explicit injected seams keep tests isolated.
     tmp_path: Path,
     *,
     harness: RuntimeHarness | None = None,
     clock: MutableClock | None = None,
     runtime: ConsoleRuntime | None = None,
     environment: Mapping[str, str] | None = None,
+    configuration_digests: tuple[str, str] | None = None,
 ) -> _ConsoleFixture:
     selected_harness = harness or RuntimeHarness()
     selected_clock = clock or MutableClock()
@@ -125,6 +127,7 @@ def _build_console(
             environment=environment or SYNTHETIC_ENVIRONMENT,
             runtime=runtime or selected_harness.as_runtime(),
             clock=selected_clock,
+            configuration_digests=configuration_digests,
         )
     )
     return _ConsoleFixture(
@@ -460,6 +463,83 @@ def test_uploads_return_deterministic_duplicate_and_malformed_errors(
     }
     decoded_source = content.decode("utf-8", errors="ignore")
     assert not decoded_source or decoded_source not in response.text
+
+
+def test_optional_configuration_digest_lock_rejects_different_uploads(
+    tmp_path: Path,
+) -> None:
+    """A reference launcher can lock uploads without exposing file contents."""
+    fixture = _build_console(
+        tmp_path,
+        configuration_digests=(
+            hashlib.sha256(SUITE_BYTES).hexdigest(),
+            hashlib.sha256(POLICY_BYTES).hexdigest(),
+        ),
+    )
+    with TestClient(
+        fixture.app,
+        base_url=_ORIGIN,
+        raise_server_exceptions=False,
+    ) as client:
+        csrf, _response = _bootstrap(client)
+        headers = _mutation_headers(csrf)
+        accepted_suite = client.post(
+            "/api/v1/configuration/suite",
+            headers=headers,
+            content=SUITE_BYTES,
+        )
+        rejected_suite = client.post(
+            "/api/v1/configuration/suite",
+            headers=headers,
+            content=SUITE_BYTES + b"\n",
+        )
+        accepted_policy = client.post(
+            "/api/v1/configuration/policy",
+            headers=headers,
+            content=POLICY_BYTES,
+        )
+        rejected_policy = client.post(
+            "/api/v1/configuration/policy",
+            headers=headers,
+            content=POLICY_BYTES + b"\n",
+        )
+
+    assert accepted_suite.status_code == HTTPStatus.OK
+    assert accepted_policy.status_code == HTTPStatus.OK
+    assert rejected_suite.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert rejected_policy.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert _json(rejected_suite)["error"] == {
+        "category": "invalid_suite",
+        "message": "The verification suite is invalid.",
+    }
+    assert _json(rejected_policy)["error"] == {
+        "category": "invalid_execution_policy",
+        "message": "The execution policy is invalid.",
+    }
+
+
+@pytest.mark.parametrize(
+    "digests",
+    [
+        ("0" * 64,),
+        ("0" * 64, "not-a-digest"),
+        ("0" * 64, "A" * 64),
+    ],
+)
+def test_invalid_configuration_digest_lock_fails_before_app_creation(
+    tmp_path: Path,
+    digests: tuple[str, ...],
+) -> None:
+    """A partial or malformed internal lock can never become an unlocked app."""
+    with pytest.raises(ValueError, match="digest lock"):
+        create_console_app(
+            ConsoleAppOptions(
+                evidence_root=tmp_path,
+                port=_PORT,
+                bootstrap_token=_BOOTSTRAP_TOKEN,
+                configuration_digests=cast("tuple[str, str]", digests),
+            )
+        )
 
 
 def test_uploads_require_json_and_failed_replacement_clears_state(

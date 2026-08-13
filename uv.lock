@@ -133,7 +133,7 @@ provides-extras = ["aws", "ui"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "hatchling", specifier = ">=1.27,<2" },
+    { name = "hatchling", specifier = ">=1.27,<1.32" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "mdformat", specifier = ">=0.7.22,<1" },
     { name = "mdformat-gfm", specifier = ">=0.4.1,<1" },

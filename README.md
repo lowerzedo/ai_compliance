@@ -11,6 +11,13 @@ security engineer who already has two least-privilege requester roles, one
 separate read-only evidence role, two pre-seeded synthetic canaries, and an
 application that emits the required correlated retrieval event.
 
+For first-run evaluation, the source distribution also includes a disposable,
+repository-only AWS reference target. It deploys a deterministic synthetic
+application with the exact requester/evidence roles and generates matching
+configuration. It is an explicit sandbox provisioning aid, not part of the
+verifier engine or a production deployment feature. See
+[`examples/aws/reference_target/README.md`](examples/aws/reference_target/README.md).
+
 An optional local security console presents that same fixed workflow in a
 browser on `127.0.0.1`. It does not add another runner, assertion, remote API,
 database, authentication service, or compliance claim.
@@ -165,6 +172,39 @@ change. It applies to `doctor aws`, `doctor retrieval`,
 `run-aws-retrieval`, and `run-aws-reciprocal-retrieval`. See
 [`examples/aws/README.md`](examples/aws/README.md) for the synthetic contract
 and operator walkthrough.
+
+## Disposable AWS reference target
+
+The optional reference target makes an isolated first run reproducible without
+requiring an existing RAG application or Bedrock deployment. It contains one
+fixed CloudFormation template, a deterministic Lambda retrieval fixture, a
+strict configuration generator, and a guarded source-only manager.
+
+The target has one IAM-authenticated `POST /retrieve` route. In `isolated`
+mode each requester receives only its own synthetic document; in `vulnerable`
+mode both receive both documents. The Lambda writes the same fixed,
+pre-generation `retrievalCanary` record consumed by the existing CloudWatch
+Logs adapter. No model is called and no generated text is produced.
+
+Deployment is deliberately outside `cai-verify`: the verifier remains
+read-only/non-mutating for this workflow. The manager requires a dedicated
+sandbox account, exact typed confirmation, AWS CLI v2, and one exact non-root
+IAM user loaded from the repository's two-key `.env` form. It never sources
+that file or accepts arbitrary AWS commands, templates, endpoints, profiles,
+or arguments. Normal tests only inspect and simulate this workflow; they do
+not invoke AWS.
+
+Run the local composition check with:
+
+```console
+uv run python -m examples.aws.reference_target.manager check
+```
+
+The complete deploy, console-launch, isolated/vulnerable, evidence-verification,
+and teardown procedure is in the
+[`reference-target guide`](examples/aws/reference_target/README.md). The
+protected live-AWS gate below remains pending until that procedure is executed
+and its sanitized release record is reviewed.
 
 ## AWS identity doctor
 
@@ -729,6 +769,8 @@ gate.
 - Python 3.14 (uv can install the version selected by `.python-version`)
 - Node 22.12 or newer for front-end contributors only; packaged-console
   operators do not need Node
+- AWS CLI v2 only for operators using the source-only disposable reference
+  target; the installed verifier never invokes it
 
 ## Local setup
 

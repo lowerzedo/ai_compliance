@@ -11,6 +11,11 @@ operator-owned authorization boundary; review and distribute it independently
 from the verification suite. Configuration IDs are public operator-controlled
 labels and must not contain secrets or sensitive identifiers.
 
+If you do not already have those application and IAM prerequisites, use the
+repository-only [disposable reference target](reference_target/README.md). It
+creates one fixed synthetic sandbox and generates both JSON files without
+adding provisioning behavior to the verifier engine.
+
 ## 1. Install the AWS extra
 
 ```console

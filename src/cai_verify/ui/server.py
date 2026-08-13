@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import math
+import os
+import re
 import secrets
 import socket
 import threading
@@ -57,6 +60,11 @@ _MAX_HISTORY_LIMIT = 50
 _MIN_BOOTSTRAP_TOKEN_LENGTH = 32
 _MAX_TCP_PORT = 65535
 _SOCKET_PORT_INDEX = 1
+_CONFIGURATION_DIGEST_COUNT = 2
+_SHA256_HEX_LENGTH = 64
+_SHA256_HEX_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+_SUITE_DIGEST_ENVIRONMENT = "CAI_VERIFY_UI_SUITE_SHA256"
+_POLICY_DIGEST_ENVIRONMENT = "CAI_VERIFY_UI_POLICY_SHA256"
 
 _CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
@@ -88,6 +96,10 @@ class ConsoleAppOptions:
     environment: Mapping[str, str] | None = field(default=None, repr=False)
     runtime: ConsoleRuntime | None = field(default=None, repr=False)
     clock: Callable[[], datetime] | None = field(default=None, repr=False)
+    configuration_digests: tuple[str, str] | None = field(
+        default=None,
+        repr=False,
+    )
 
 
 @final
@@ -178,6 +190,9 @@ def create_console_app(  # noqa: C901, PLR0915 - routes share one trust boundary
     if not 1 <= options.port <= _MAX_TCP_PORT:
         message = "console port must be in range 1..65535"
         raise ValueError(message)
+    configuration_digests = _validated_configuration_digests(
+        options.configuration_digests
+    )
     expected_authority = f"127.0.0.1:{options.port}"
     expected_origin = f"http://{expected_authority}"
     session = _SessionBoundary(options.bootstrap_token)
@@ -323,6 +338,12 @@ def create_console_app(  # noqa: C901, PLR0915 - routes share one trust boundary
     @app.post("/api/v1/configuration/suite")
     async def upload_suite(request: Request) -> JSONResponse:
         content = await _read_bounded_body(request, MAX_SUITE_BYTES)
+        if configuration_digests is not None:
+            _require_configuration_digest(
+                content,
+                expected=configuration_digests[0],
+                failure_category="invalid_suite",
+            )
         try:
             payload = state.load_suite(content)
         except ConsoleStateError:
@@ -337,6 +358,12 @@ def create_console_app(  # noqa: C901, PLR0915 - routes share one trust boundary
             request,
             MAX_AWS_EXECUTION_POLICY_BYTES,
         )
+        if configuration_digests is not None:
+            _require_configuration_digest(
+                content,
+                expected=configuration_digests[1],
+                failure_category="invalid_execution_policy",
+            )
         try:
             payload = state.load_policy(content)
         except ConsoleStateError:
@@ -447,6 +474,9 @@ def run_console(
                 evidence_root=evidence_root,
                 port=actual_port,
                 bootstrap_token=bootstrap_token,
+                configuration_digests=_configuration_digests_from_environment(
+                    os.environ
+                ),
             )
         )
         origin = f"http://127.0.0.1:{actual_port}"
@@ -488,6 +518,49 @@ def cast_port(address: object) -> int:
         message = "loopback listener returned an invalid address"
         raise RuntimeError(message)
     return address[1]
+
+
+def _configuration_digests_from_environment(
+    environment: Mapping[str, str],
+) -> tuple[str, str] | None:
+    """Read only the paired internal digest lock, never configuration bytes."""
+    suite_digest = environment.get(_SUITE_DIGEST_ENVIRONMENT)
+    policy_digest = environment.get(_POLICY_DIGEST_ENVIRONMENT)
+    if suite_digest is None and policy_digest is None:
+        return None
+    return _validated_configuration_digests((suite_digest, policy_digest))
+
+
+def _validated_configuration_digests(
+    value: object,
+) -> tuple[str, str] | None:
+    if value is None:
+        return None
+    if (
+        type(value) is not tuple
+        or len(value) != _CONFIGURATION_DIGEST_COUNT
+        or any(
+            type(item) is not str
+            or len(item) != _SHA256_HEX_LENGTH
+            or _SHA256_HEX_PATTERN.fullmatch(item) is None
+            for item in value
+        )
+    ):
+        message = "configuration digest lock must contain two SHA-256 values"
+        raise ValueError(message)
+    return value
+
+
+def _require_configuration_digest(
+    content: bytes,
+    *,
+    expected: str,
+    failure_category: str,
+) -> None:
+    """Fail before parsing when an upload differs from the locked local file."""
+    observed = hashlib.sha256(content).hexdigest()
+    if not hmac.compare_digest(observed, expected):
+        _fail(failure_category, 422)
 
 
 async def _read_bounded_body(request: Request, maximum_bytes: int) -> bytes:

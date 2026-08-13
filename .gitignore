@@ -2,6 +2,7 @@
 .DS_Store
 .coverage
 .cache/
+.cai-verify/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
@@ -13,3 +14,4 @@ __pycache__/
 build/
 dist/
 docs/
+local-test.md

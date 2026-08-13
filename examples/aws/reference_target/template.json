@@ -1,0 +1,644 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Disposable synthetic reciprocal-retrieval reference target for CAI Verify.",
+  "Parameters": {
+    "ExpectedAccountId": {
+      "AllowedPattern": "^[0-9]{12}$",
+      "Description": "Exact dedicated sandbox account confirmed by the operator.",
+      "Type": "String"
+    },
+    "ExpectedRegion": {
+      "AllowedPattern": "^[a-z]{2}(-gov)?-[a-z]+-[0-9]$",
+      "Description": "Exact sandbox region confirmed by the operator.",
+      "Type": "String"
+    },
+    "OperatorPrincipalArn": {
+      "AllowedPattern": "^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:user/[A-Za-z0-9+=,.@_/-]{1,512}$",
+      "Description": "Exact non-root IAM user allowed to assume the verifier roles.",
+      "Type": "String"
+    },
+    "ReferenceMode": {
+      "AllowedValues": [
+        "isolated",
+        "vulnerable"
+      ],
+      "Description": "Fixed deploy-time retrieval behavior.",
+      "Type": "String"
+    },
+    "SandboxAcknowledgement": {
+      "AllowedValues": [
+        "I_ACKNOWLEDGE_SYNTHETIC_SANDBOX_ONLY"
+      ],
+      "Description": "Explicit acknowledgement that this stack is disposable and synthetic.",
+      "Type": "String"
+    }
+  },
+  "Rules": {
+    "ConfirmExactAccount": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Equals": [
+              {
+                "Ref": "ExpectedAccountId"
+              },
+              {
+                "Ref": "AWS::AccountId"
+              }
+            ]
+          },
+          "AssertDescription": "ExpectedAccountId must equal the deployment account."
+        }
+      ]
+    },
+    "ConfirmExactRegion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Equals": [
+              {
+                "Ref": "ExpectedRegion"
+              },
+              {
+                "Ref": "AWS::Region"
+              }
+            ]
+          },
+          "AssertDescription": "ExpectedRegion must equal the deployment region."
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "DocumentsTable": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "documentId",
+            "AttributeType": "S"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "KeySchema": [
+          {
+            "AttributeName": "documentId",
+            "KeyType": "HASH"
+          }
+        ],
+        "SSESpecification": {
+          "SSEEnabled": true,
+          "SSEType": "KMS"
+        },
+        "TableName": {
+          "Fn::Sub": "${AWS::StackName}-documents"
+        },
+        "Tags": [
+          {
+            "Key": "cai-verify:environment",
+            "Value": "sandbox"
+          },
+          {
+            "Key": "cai-verify:purpose",
+            "Value": "synthetic-reciprocal-retrieval"
+          }
+        ]
+      },
+      "Type": "AWS::DynamoDB::Table",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "EvidenceLogGroup": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/cai-verify/reference/${AWS::StackName}"
+        },
+        "RetentionInDays": 1,
+        "Tags": [
+          {
+            "Key": "cai-verify:environment",
+            "Value": "sandbox"
+          },
+          {
+            "Key": "cai-verify:purpose",
+            "Value": "synthetic-reciprocal-retrieval"
+          }
+        ]
+      },
+      "Type": "AWS::Logs::LogGroup",
+      "UpdateReplacePolicy": "Delete"
+    },
+    "EvidenceLogStream": {
+      "DependsOn": "EvidenceLogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Ref": "EvidenceLogGroup"
+        },
+        "LogStreamName": "retrieval-events"
+      },
+      "Type": "AWS::Logs::LogStream"
+    },
+    "LambdaExecutionRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "MaxSessionDuration": 3600,
+        "RoleName": {
+          "Fn::Sub": "${AWS::StackName}-lambda"
+        },
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "dynamodb:GetItem",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "DocumentsTable",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Action": "logs:PutLogEvents",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${EvidenceLogGroup}:log-stream:retrieval-events"
+                  }
+                }
+              ],
+              "Version": "2012-10-17"
+            },
+            "PolicyName": "fixed-reference-runtime"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "cai-verify:environment",
+            "Value": "sandbox"
+          },
+          {
+            "Key": "cai-verify:purpose",
+            "Value": "synthetic-reciprocal-retrieval"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RetrievalFunction": {
+      "DependsOn": [
+        "EvidenceLogStream",
+        "LambdaExecutionRole"
+      ],
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "ZipFile": "__CAI_VERIFY_REFERENCE_HANDLER__"
+        },
+        "Environment": {
+          "Variables": {
+            "DOCUMENTS_TABLE_NAME": {
+              "Ref": "DocumentsTable"
+            },
+            "EXPECTED_ACCOUNT_ID": {
+              "Ref": "AWS::AccountId"
+            },
+            "LOG_GROUP_NAME": {
+              "Ref": "EvidenceLogGroup"
+            },
+            "LOG_STREAM_NAME": "retrieval-events",
+            "REFERENCE_MODE": {
+              "Ref": "ReferenceMode"
+            },
+            "REQUESTER_A_ROLE_ARN": {
+              "Fn::GetAtt": [
+                "RequesterARole",
+                "Arn"
+              ]
+            },
+            "REQUESTER_A_SESSION_NAME": "cai-verify-reference-requester-a",
+            "REQUESTER_B_ROLE_ARN": {
+              "Fn::GetAtt": [
+                "RequesterBRole",
+                "Arn"
+              ]
+            },
+            "REQUESTER_B_SESSION_NAME": "cai-verify-reference-requester-b"
+          }
+        },
+        "Handler": "index.lambda_handler",
+        "MemorySize": 128,
+        "ReservedConcurrentExecutions": 2,
+        "Role": {
+          "Fn::GetAtt": [
+            "LambdaExecutionRole",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.14",
+        "Tags": [
+          {
+            "Key": "cai-verify:environment",
+            "Value": "sandbox"
+          },
+          {
+            "Key": "cai-verify:purpose",
+            "Value": "synthetic-reciprocal-retrieval"
+          }
+        ],
+        "Timeout": 10
+      },
+      "Type": "AWS::Lambda::Function"
+    },
+    "RestApi": {
+      "Properties": {
+        "ApiKeySourceType": "HEADER",
+        "BinaryMediaTypes": [],
+        "DisableExecuteApiEndpoint": false,
+        "EndpointConfiguration": {
+          "Types": [
+            "REGIONAL"
+          ]
+        },
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-retrieval"
+        },
+        "Tags": [
+          {
+            "Key": "cai-verify:environment",
+            "Value": "sandbox"
+          },
+          {
+            "Key": "cai-verify:purpose",
+            "Value": "synthetic-reciprocal-retrieval"
+          }
+        ]
+      },
+      "Type": "AWS::ApiGateway::RestApi"
+    },
+    "RetrieveResource": {
+      "Properties": {
+        "ParentId": {
+          "Fn::GetAtt": [
+            "RestApi",
+            "RootResourceId"
+          ]
+        },
+        "PathPart": "retrieve",
+        "RestApiId": {
+          "Ref": "RestApi"
+        }
+      },
+      "Type": "AWS::ApiGateway::Resource"
+    },
+    "RetrieveMethod": {
+      "Properties": {
+        "ApiKeyRequired": false,
+        "AuthorizationType": "AWS_IAM",
+        "HttpMethod": "POST",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "PassthroughBehavior": "NEVER",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Sub": "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RetrievalFunction.Arn}/invocations"
+          }
+        },
+        "ResourceId": {
+          "Ref": "RetrieveResource"
+        },
+        "RestApiId": {
+          "Ref": "RestApi"
+        }
+      },
+      "Type": "AWS::ApiGateway::Method"
+    },
+    "ApiDeploymentE067fffcfc0a": {
+      "DependsOn": "RetrieveMethod",
+      "Properties": {
+        "Description": "Fixed IAM-authenticated synthetic retrieval route.",
+        "RestApiId": {
+          "Ref": "RestApi"
+        }
+      },
+      "Type": "AWS::ApiGateway::Deployment"
+    },
+    "ApiStage": {
+      "Properties": {
+        "CacheClusterEnabled": false,
+        "DeploymentId": {
+          "Ref": "ApiDeploymentE067fffcfc0a"
+        },
+        "Description": "Disposable CAI Verify synthetic sandbox.",
+        "MethodSettings": [
+          {
+            "CachingEnabled": false,
+            "DataTraceEnabled": false,
+            "HttpMethod": "POST",
+            "LoggingLevel": "OFF",
+            "MetricsEnabled": false,
+            "ResourcePath": "/~1retrieve",
+            "ThrottlingBurstLimit": 4,
+            "ThrottlingRateLimit": 2
+          }
+        ],
+        "RestApiId": {
+          "Ref": "RestApi"
+        },
+        "StageName": "sandbox",
+        "Tags": [
+          {
+            "Key": "cai-verify:environment",
+            "Value": "sandbox"
+          },
+          {
+            "Key": "cai-verify:purpose",
+            "Value": "synthetic-reciprocal-retrieval"
+          }
+        ],
+        "TracingEnabled": false
+      },
+      "Type": "AWS::ApiGateway::Stage"
+    },
+    "ApiInvokePermission": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "RetrievalFunction"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceAccount": {
+          "Ref": "AWS::AccountId"
+        },
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/sandbox/POST/retrieve"
+        }
+      },
+      "Type": "AWS::Lambda::Permission"
+    },
+    "RequesterARole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "sts:RoleSessionName": "cai-verify-reference-requester-a"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Ref": "OperatorPrincipalArn"
+                }
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "MaxSessionDuration": 3600,
+        "RoleName": {
+          "Fn::Sub": "${AWS::StackName}-requester-a"
+        },
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "execute-api:Invoke",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/sandbox/POST/retrieve"
+                  }
+                }
+              ],
+              "Version": "2012-10-17"
+            },
+            "PolicyName": "invoke-fixed-retrieval"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "cai-verify:environment",
+            "Value": "sandbox"
+          },
+          {
+            "Key": "cai-verify:purpose",
+            "Value": "synthetic-reciprocal-retrieval"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "RequesterBRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "sts:RoleSessionName": "cai-verify-reference-requester-b"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Ref": "OperatorPrincipalArn"
+                }
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "MaxSessionDuration": 3600,
+        "RoleName": {
+          "Fn::Sub": "${AWS::StackName}-requester-b"
+        },
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "execute-api:Invoke",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/sandbox/POST/retrieve"
+                  }
+                }
+              ],
+              "Version": "2012-10-17"
+            },
+            "PolicyName": "invoke-fixed-retrieval"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "cai-verify:environment",
+            "Value": "sandbox"
+          },
+          {
+            "Key": "cai-verify:purpose",
+            "Value": "synthetic-reciprocal-retrieval"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    },
+    "EvidenceReaderRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "sts:RoleSessionName": "cai-verify-reference-evidence-reader"
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Ref": "OperatorPrincipalArn"
+                }
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "MaxSessionDuration": 3600,
+        "RoleName": {
+          "Fn::Sub": "${AWS::StackName}-evidence-reader"
+        },
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "logs:FilterLogEvents",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${EvidenceLogGroup}"
+                  }
+                }
+              ],
+              "Version": "2012-10-17"
+            },
+            "PolicyName": "read-fixed-retrieval-evidence"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "cai-verify:environment",
+            "Value": "sandbox"
+          },
+          {
+            "Key": "cai-verify:purpose",
+            "Value": "synthetic-reciprocal-retrieval"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    }
+  },
+  "Outputs": {
+    "AccountId": {
+      "Value": {
+        "Ref": "AWS::AccountId"
+      }
+    },
+    "AllowedHost": {
+      "Value": {
+        "Fn::Sub": "${RestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
+      }
+    },
+    "ApplicationEndpoint": {
+      "Value": {
+        "Fn::Sub": "https://${RestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/sandbox"
+      }
+    },
+    "DocumentsTableName": {
+      "Value": {
+        "Ref": "DocumentsTable"
+      }
+    },
+    "EvidenceReaderRoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "EvidenceReaderRole",
+          "Arn"
+        ]
+      }
+    },
+    "EvidenceReaderSessionName": {
+      "Value": "cai-verify-reference-evidence-reader"
+    },
+    "LogGroupName": {
+      "Value": {
+        "Ref": "EvidenceLogGroup"
+      }
+    },
+    "OwnershipMarker": {
+      "Value": "cai-verify-reference-target/1"
+    },
+    "Partition": {
+      "Value": {
+        "Ref": "AWS::Partition"
+      }
+    },
+    "ReferenceMode": {
+      "Value": {
+        "Ref": "ReferenceMode"
+      }
+    },
+    "Region": {
+      "Value": {
+        "Ref": "AWS::Region"
+      }
+    },
+    "RequesterARoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "RequesterARole",
+          "Arn"
+        ]
+      }
+    },
+    "RequesterASessionName": {
+      "Value": "cai-verify-reference-requester-a"
+    },
+    "RequesterBRoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "RequesterBRole",
+          "Arn"
+        ]
+      }
+    },
+    "RequesterBSessionName": {
+      "Value": "cai-verify-reference-requester-b"
+    },
+    "SchemaVersion": {
+      "Value": "1"
+    },
+    "StackName": {
+      "Value": {
+        "Ref": "AWS::StackName"
+      }
+    }
+  }
+}

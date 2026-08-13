@@ -23,6 +23,18 @@ _AWS_EXAMPLE_FILENAMES = (
     "reciprocal-retrieval-policy.json",
     "reciprocal-retrieval-suite.json",
 )
+_REFERENCE_TARGET_FILENAMES = (
+    "README.md",
+    "__init__.py",
+    "config.py",
+    "handler.py",
+    "manager.py",
+    "template.json",
+)
+_REFERENCE_TARGET_PARENT_FILES = (
+    "examples/__init__.py",
+    "examples/aws/__init__.py",
+)
 _UI_GENERATED_DIRECTORIES = ("dist", "node_modules")
 _UI_STATIC_DIRECTORY = PROJECT_ROOT / "src/cai_verify/ui/static"
 
@@ -234,6 +246,12 @@ def _validate_inventory(  # noqa: C901, PLR0912 - explicit archive checks stay v
     ui_assets = _ui_asset_inventory()
     with zipfile.ZipFile(wheel) as archive:
         wheel_names = set(archive.namelist())
+        if any(
+            name.startswith("examples/") or "/examples/aws/reference_target/" in name
+            for name in wheel_names
+        ):
+            message = "wheel included source-only reference-target files"
+            raise RuntimeError(message)
         for relative_path, expected in ui_assets.items():
             archive_path = f"cai_verify/ui/static/{relative_path}"
             if archive_path not in wheel_names:
@@ -279,6 +297,7 @@ def _validate_inventory(  # noqa: C901, PLR0912 - explicit archive checks stay v
             ):
                 message = f"source distribution omitted AWS example {filename}"
                 raise RuntimeError(message)
+        _validate_reference_target_inventory(archive, source_names)
         for relative_path, expected in _ui_source_inventory().items():
             suffix = f"/ui/{relative_path}"
             matches = [name for name in source_names if name.endswith(suffix)]
@@ -295,6 +314,56 @@ def _validate_inventory(  # noqa: C901, PLR0912 - explicit archive checks stay v
                     f"{relative_path}"
                 )
                 raise RuntimeError(message)
+
+
+def _validate_reference_target_inventory(
+    archive: tarfile.TarFile,
+    source_names: set[str],
+) -> None:
+    reference_root = PROJECT_ROOT / "examples/aws/reference_target"
+    expected_sources = {
+        f"examples/aws/reference_target/{filename}": reference_root / filename
+        for filename in _REFERENCE_TARGET_FILENAMES
+    }
+    expected_sources.update(
+        {
+            relative_path: PROJECT_ROOT / relative_path
+            for relative_path in _REFERENCE_TARGET_PARENT_FILES
+        }
+    )
+    for relative_path, expected_path in expected_sources.items():
+        suffix = f"/{relative_path}"
+        matches = [name for name in source_names if name.endswith(suffix)]
+        if len(matches) != 1:
+            message = (
+                "source distribution omitted or duplicated reference target "
+                f"{relative_path}"
+            )
+            raise RuntimeError(message)
+        member = archive.getmember(matches[0])
+        extracted = archive.extractfile(member)
+        if (
+            not member.isfile()
+            or extracted is None
+            or extracted.read() != expected_path.read_bytes()
+        ):
+            message = (
+                f"source distribution reference target differs for {relative_path}"
+            )
+            raise RuntimeError(message)
+    expected_reference_suffixes = {
+        f"/examples/aws/reference_target/{filename}"
+        for filename in _REFERENCE_TARGET_FILENAMES
+    }
+    observed_reference_names = {
+        name for name in source_names if "/examples/aws/reference_target/" in name
+    }
+    if any(
+        not any(name.endswith(suffix) for suffix in expected_reference_suffixes)
+        for name in observed_reference_names
+    ):
+        message = "source distribution included unapproved reference-target state"
+        raise RuntimeError(message)
 
 
 def _ui_asset_inventory() -> dict[str, bytes]:

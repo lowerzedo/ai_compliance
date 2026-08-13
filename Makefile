@@ -1,7 +1,7 @@
 UV ?= uv
 NPM ?= npm
 UI_DIR := ui
-MARKDOWN_PATHS := README.md $(wildcard examples/*.md examples/*/*.md) $(if $(wildcard docs),docs)
+MARKDOWN_PATHS := README.md $(wildcard examples/*.md examples/*/*.md examples/*/*/*.md) $(if $(wildcard docs),docs)
 
 .PHONY: audit build check docs format format-docs lint sync test typecheck \
 	ui-build ui-format-check ui-test ui-typecheck
