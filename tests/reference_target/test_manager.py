@@ -44,6 +44,32 @@ _PRIVATE_DIRECTORY_MODE = 0o700
 _CREDENTIAL_BYTES = (
     f"ACCESS_KEY_ID={_ACCESS_KEY}\nSECRET_ACCESS_KEY={_SECRET_KEY}\n"
 ).encode()
+_DEPLOY_PROGRESS = (
+    "[1/8] Validating local inputs",
+    "[2/8] Checking AWS CLI v2",
+    "[3/8] Verifying caller account",
+    "[4/8] Checking existing stack ownership",
+    "[5/8] Deploying CloudFormation stack (up to 10 minutes)",
+    "[6/8] Validating deployed outputs",
+    "[7/8] Seeding synthetic documents",
+    "[8/8] Writing private configuration",
+)
+_DESTROY_PROGRESS = (
+    "[1/6] Validating local inputs",
+    "[2/6] Checking AWS CLI v2",
+    "[3/6] Verifying caller account",
+    "[4/6] Verifying stack ownership",
+    "[5/6] Requesting exact stack deletion",
+    "[6/6] Waiting for stack deletion (up to 15 minutes)",
+)
+
+
+def _stack_not_found_stderr(*, stack_name: str = STACK_NAME) -> bytes:
+    return (
+        "An error occurred (ValidationError) when calling the "
+        "DescribeStacks operation: Stack with id "
+        f"{stack_name} does not exist\n"
+    ).encode()
 
 
 @dataclass(slots=True)
@@ -54,6 +80,7 @@ class _AwsRunner:
     stack_description: bytes | None = field(default=None, repr=False)
     stack_template: bytes | None = field(default=None, repr=False)
     get_template_response: bytes | None = field(default=None, repr=False)
+    missing_stack_stderr: bytes | None = field(default=None, repr=False)
     calls: list[tuple[tuple[str, ...], dict[str, str], float]] = field(
         default_factory=list
     )
@@ -85,10 +112,10 @@ class _AwsRunner:
                 return CommandResult(
                     returncode=255,
                     stderr=(
-                        "An error occurred (ValidationError) when calling the "
-                        "DescribeStacks operation: Stack with id "
-                        f"{STACK_NAME} does not exist\n"
-                    ).encode(),
+                        self.missing_stack_stderr
+                        if self.missing_stack_stderr is not None
+                        else _stack_not_found_stderr()
+                    ),
                 )
             return CommandResult(
                 returncode=0,
@@ -299,8 +326,74 @@ def test_deploy_uses_fixed_commands_scrubbed_credentials_and_private_seed(
     assert _CANARY_A not in suite + policy
     assert _CANARY_B not in suite + policy
     captured = capsys.readouterr()
-    assert captured.out == ("Reference target deployed and configuration generated.\n")
+    assert captured.out.splitlines() == [
+        *_DEPLOY_PROGRESS,
+        "Reference target deployed and configuration generated.",
+    ]
     assert captured.err == ""
+    _assert_redacted(captured.out)
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        b"",
+        b"aws: [ERROR]: ",
+    ],
+)
+def test_deploy_accepts_exact_stack_not_found_with_cli_formatting(
+    prefix: bytes,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Known CLI presentation cannot hide the exact not-found condition."""
+    runner = _AwsRunner(missing_stack_stderr=b"\n" + prefix + _stack_not_found_stderr())
+    monkeypatch.setattr(manager, "_aws_cli_path", lambda: _AWS_PATH)
+    env_file = _env_file(tmp_path)
+
+    exit_code = manager.main(
+        _deploy_argv(tmp_path, env_file),
+        runner=runner,
+        input_fn=lambda _prompt: _confirmation("DEPLOY"),
+        environment=_process_environment(),
+    )
+
+    assert exit_code == 0
+    describe_command = runner.calls[2][0]
+    assert describe_command[-3:] == ("--no-cli-pager", "--color", "off")
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        b"",
+        b"synthetic access denied",
+        _stack_not_found_stderr(stack_name="cai-verify-ref-other"),
+        _stack_not_found_stderr() + b"additional diagnostic\n",
+        b"aws: [WARNING]: " + _stack_not_found_stderr(),
+        b"aws: [ERROR]: synthetic prefix diagnostic\n" + _stack_not_found_stderr(),
+        b"\x1b[31m" + _stack_not_found_stderr().rstrip(b"\n") + b"\x1b[0m\n",
+    ],
+)
+def test_deploy_rejects_every_non_exact_stack_not_found_response(
+    stderr: bytes,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only one uncolored exact-name not-found line authorizes creation."""
+    runner = _AwsRunner(missing_stack_stderr=stderr)
+    monkeypatch.setattr(manager, "_aws_cli_path", lambda: _AWS_PATH)
+    env_file = _env_file(tmp_path)
+
+    exit_code = manager.main(
+        _deploy_argv(tmp_path, env_file),
+        runner=runner,
+        input_fn=lambda _prompt: _confirmation("DEPLOY"),
+        environment=_process_environment(),
+    )
+
+    assert exit_code == _OPERATIONAL_FAILURE
+    assert "deploy" not in [_operation(call[0]) for call in runner.calls]
 
 
 def test_deploy_failure_discards_aws_diagnostics(
@@ -322,9 +415,10 @@ def test_deploy_failure_discards_aws_diagnostics(
 
     assert exit_code == _OPERATIONAL_FAILURE
     captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "aws_command_failed" in captured.err
+    assert captured.out.splitlines() == list(_DEPLOY_PROGRESS[:5])
+    assert "cloudformation_deploy_failed" in captured.err
     assert "synthetic SDK secret diagnostic" not in captured.err
+    _assert_redacted(captured.out)
     _assert_redacted(captured.err)
 
 
@@ -352,8 +446,52 @@ def test_deploy_rejects_non_not_found_describe_failure_before_mutation(
         "describe-stacks",
     ]
     captured = capsys.readouterr()
-    assert "aws_command_failed" in captured.err
+    assert captured.out.splitlines() == list(_DEPLOY_PROGRESS[:4])
+    assert "cloudformation_stack_lookup_failed" in captured.err
     assert "synthetic SDK secret diagnostic" not in captured.err
+    _assert_redacted(captured.out)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (
+            "get-caller-identity",
+            "aws_identity_check_failed",
+            _DEPLOY_PROGRESS[:3],
+        ),
+        (
+            "transact-write-items",
+            "dynamodb_seed_failed",
+            _DEPLOY_PROGRESS[:7],
+        ),
+    ],
+)
+def test_deploy_reports_safe_stage_specific_failures(
+    case: tuple[str, str, tuple[str, ...]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AWS failures identify the safe stage without returning diagnostics."""
+    operation, expected_code, expected_progress = case
+    runner = _AwsRunner(fail_operation=operation)
+    monkeypatch.setattr(manager, "_aws_cli_path", lambda: _AWS_PATH)
+    env_file = _env_file(tmp_path)
+
+    exit_code = manager.main(
+        _deploy_argv(tmp_path, env_file),
+        runner=runner,
+        input_fn=lambda _prompt: _confirmation("DEPLOY"),
+        environment=_process_environment(),
+    )
+
+    assert exit_code == _OPERATIONAL_FAILURE
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == list(expected_progress)
+    assert expected_code in captured.err
+    assert "synthetic SDK secret diagnostic" not in captured.err
+    _assert_redacted(captured.out + captured.err)
 
 
 def test_deploy_rejects_unowned_existing_stack_before_mutation(
@@ -765,8 +903,47 @@ def test_destroy_redacts_get_template_failure_before_deletion(
     assert exit_code == _OPERATIONAL_FAILURE
     assert "delete-stack" not in [_operation(call[0]) for call in runner.calls]
     captured = capsys.readouterr()
-    assert "aws_command_failed" in captured.err
+    assert captured.out.splitlines() == list(_DESTROY_PROGRESS[:4])
+    assert "cloudformation_template_read_failed" in captured.err
     assert "synthetic SDK secret diagnostic" not in captured.err
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("delete-stack", "cloudformation_delete_failed", _DESTROY_PROGRESS[:5]),
+        (
+            "wait",
+            "cloudformation_delete_wait_failed",
+            _DESTROY_PROGRESS,
+        ),
+    ],
+)
+def test_destroy_reports_safe_stage_specific_failures(
+    case: tuple[str, str, tuple[str, ...]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Deletion failures remain redacted while identifying their safe stage."""
+    operation, expected_code, expected_progress = case
+    runner = _AwsRunner(stack_exists=True, fail_operation=operation)
+    monkeypatch.setattr(manager, "_aws_cli_path", lambda: _AWS_PATH)
+    env_file = _env_file(tmp_path)
+
+    exit_code = manager.main(
+        _destroy_argv(env_file),
+        runner=runner,
+        input_fn=lambda _prompt: _confirmation("DESTROY"),
+        environment=_process_environment(),
+    )
+
+    assert exit_code == _OPERATIONAL_FAILURE
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == list(expected_progress)
+    assert expected_code in captured.err
+    assert "synthetic SDK secret diagnostic" not in captured.err
+    _assert_redacted(captured.out + captured.err)
 
 
 def test_generate_is_local_and_never_calls_runner(tmp_path: Path) -> None:
@@ -1053,3 +1230,4 @@ def _assert_redacted(value: str) -> None:
     assert _CANARY_A not in value
     assert _CANARY_B not in value
     assert ACCOUNT_ID not in value
+    assert STACK_NAME not in value

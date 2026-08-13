@@ -100,6 +100,7 @@ _FIXED_OWNERSHIP_TAGS = {
 _MAX_STACK_TAGS = 50
 _SUITE_DIGEST_ENVIRONMENT = "CAI_VERIFY_UI_SUITE_SHA256"
 _POLICY_DIGEST_ENVIRONMENT = "CAI_VERIFY_UI_POLICY_SHA256"
+_AWS_CLI_ERROR_PREFIX = b"aws: [ERROR]: "
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -346,12 +347,15 @@ def _deploy(
         arguments.stack_name,
         input_fn=input_fn,
     )
+    _progress("[1/8] Validating local inputs")
     output_directory = _prepare_output_directory_before_mutation(
         arguments.output_dir,
         replace=arguments.replace,
     )
     credentials = load_credential_file(_read_credential_file(Path(arguments.env_file)))
     canaries = _canaries(process_environment)
+    rendered_template = render_template()
+    _progress("[2/8] Checking AWS CLI v2")
     aws_cli = _aws_cli_path()
     child_environment = aws_environment(
         credentials,
@@ -359,6 +363,7 @@ def _deploy(
         parent=process_environment,
     )
     _require_aws_cli_v2(aws_cli, child_environment, runner)
+    _progress("[3/8] Verifying caller account")
     caller = _caller_identity(
         aws_cli,
         child_environment,
@@ -366,6 +371,7 @@ def _deploy(
         expected_account_id=arguments.account_id,
         expected_region=arguments.region,
     )
+    _progress("[4/8] Checking existing stack ownership")
     existing_description = _describe_existing_stack(
         aws_cli,
         child_environment,
@@ -374,7 +380,6 @@ def _deploy(
         region=arguments.region,
         stack_name=arguments.stack_name,
     )
-    rendered_template = render_template()
     if existing_description is not None:
         _require_exact_stack_template(
             aws_cli,
@@ -390,6 +395,7 @@ def _deploy(
             expected_region=arguments.region,
             expected_stack_name=arguments.stack_name,
         )
+    _progress("[5/8] Deploying CloudFormation stack (up to 10 minutes)")
     with tempfile.TemporaryDirectory(prefix="cai-verify-reference-") as temporary:
         temporary_path = Path(temporary)
         os.chmod(temporary_path, 0o700)
@@ -427,7 +433,9 @@ def _deploy(
             environment=child_environment,
             runner=runner,
             timeout_seconds=AWS_DEPLOY_TIMEOUT_SECONDS,
+            failure_code=ReferenceTargetFailureCode.CLOUDFORMATION_DEPLOY_FAILED,
         )
+        _progress("[6/8] Validating deployed outputs")
         description = _describe_stack(
             aws_cli,
             child_environment,
@@ -445,6 +453,7 @@ def _deploy(
         if descriptor.reference_mode != arguments.mode:
             raise ReferenceTargetError(ReferenceTargetFailureCode.INVALID_DESCRIPTION)
         generated = generate_configuration(descriptor)
+        _progress("[7/8] Seeding synthetic documents")
         seed_path = temporary_path / "seed.json"
         _write_private_file(
             seed_path, _seed_bytes(descriptor.documents_table_name, canaries)
@@ -466,7 +475,9 @@ def _deploy(
             environment=child_environment,
             runner=runner,
             timeout_seconds=AWS_COMMAND_TIMEOUT_SECONDS,
+            failure_code=ReferenceTargetFailureCode.DYNAMODB_SEED_FAILED,
         )
+        _progress("[8/8] Writing private configuration")
         write_configuration(
             output_directory,
             generated,
@@ -489,7 +500,9 @@ def _destroy(
         arguments.stack_name,
         input_fn=input_fn,
     )
+    _progress("[1/6] Validating local inputs")
     credentials = load_credential_file(_read_credential_file(Path(arguments.env_file)))
+    _progress("[2/6] Checking AWS CLI v2")
     aws_cli = _aws_cli_path()
     child_environment = aws_environment(
         credentials,
@@ -497,6 +510,7 @@ def _destroy(
         parent=process_environment,
     )
     _require_aws_cli_v2(aws_cli, child_environment, runner)
+    _progress("[3/6] Verifying caller account")
     _caller_identity(
         aws_cli,
         child_environment,
@@ -504,6 +518,7 @@ def _destroy(
         expected_account_id=arguments.account_id,
         expected_region=arguments.region,
     )
+    _progress("[4/6] Verifying stack ownership")
     description = _describe_existing_stack(
         aws_cli,
         child_environment,
@@ -528,6 +543,7 @@ def _destroy(
         expected_region=arguments.region,
         expected_stack_name=arguments.stack_name,
     )
+    _progress("[5/6] Requesting exact stack deletion")
     _aws_call(
         aws_cli,
         [
@@ -541,7 +557,9 @@ def _destroy(
         environment=child_environment,
         runner=runner,
         timeout_seconds=AWS_COMMAND_TIMEOUT_SECONDS,
+        failure_code=ReferenceTargetFailureCode.CLOUDFORMATION_DELETE_FAILED,
     )
+    _progress("[6/6] Waiting for stack deletion (up to 15 minutes)")
     _aws_call(
         aws_cli,
         [
@@ -556,6 +574,7 @@ def _destroy(
         environment=child_environment,
         runner=runner,
         timeout_seconds=AWS_DELETE_TIMEOUT_SECONDS,
+        failure_code=ReferenceTargetFailureCode.CLOUDFORMATION_DELETE_WAIT_FAILED,
     )
 
 
@@ -827,6 +846,7 @@ def _caller_identity(
         environment=environment,
         runner=runner,
         timeout_seconds=AWS_COMMAND_TIMEOUT_SECONDS,
+        failure_code=ReferenceTargetFailureCode.AWS_IDENTITY_CHECK_FAILED,
     )
     try:
         decoded = _load_json(content, maximum=64 * 1024)
@@ -878,6 +898,7 @@ def _describe_stack(
         environment=environment,
         runner=runner,
         timeout_seconds=AWS_COMMAND_TIMEOUT_SECONDS,
+        failure_code=ReferenceTargetFailureCode.CLOUDFORMATION_STACK_READ_FAILED,
     )
 
 
@@ -905,6 +926,8 @@ def _describe_existing_stack(
                 "--output",
                 "json",
                 "--no-cli-pager",
+                "--color",
+                "off",
             ],
             environment=environment,
             timeout_seconds=AWS_COMMAND_TIMEOUT_SECONDS,
@@ -917,19 +940,34 @@ def _describe_existing_stack(
             raise ValueError
         if result.returncode == 0:
             return result.stdout
-        expected = (
+        expected_line = (
             "An error occurred (ValidationError) when calling the "
             "DescribeStacks operation: Stack with id "
-            f"{stack_name} does not exist\n"
+            f"{stack_name} does not exist"
         ).encode()
-        if result.stdout == b"" and hmac.compare_digest(result.stderr, expected):
+        # AWS CLI v2 may place a blank line around an error and newer v2 builds
+        # add one fixed severity prefix even when color is disabled. Ignore
+        # only empty lines, then require the exact requested-stack error with
+        # either known presentation. Additional diagnostics, changed text, or
+        # any stdout remain failures and cannot authorize creation.
+        error_lines = [line for line in result.stderr.splitlines() if line]
+        accepted_error_lines = (
+            expected_line,
+            _AWS_CLI_ERROR_PREFIX + expected_line,
+        )
+        if (
+            result.stdout == b""
+            and len(error_lines) == 1
+            and any(
+                hmac.compare_digest(error_lines[0], accepted)
+                for accepted in accepted_error_lines
+            )
+        ):
             return None
         raise ValueError
-    except ReferenceTargetError:
-        raise
     except Exception:
         raise ReferenceTargetError(
-            ReferenceTargetFailureCode.AWS_COMMAND_FAILED
+            ReferenceTargetFailureCode.CLOUDFORMATION_STACK_LOOKUP_FAILED
         ) from None
 
 
@@ -962,6 +1000,7 @@ def _require_exact_stack_template(
         environment=environment,
         runner=runner,
         timeout_seconds=AWS_COMMAND_TIMEOUT_SECONDS,
+        failure_code=ReferenceTargetFailureCode.CLOUDFORMATION_TEMPLATE_READ_FAILED,
     )
     try:
         response = _load_json(content, maximum=MAX_AWS_COMMAND_OUTPUT_BYTES)
@@ -1072,10 +1111,11 @@ def _aws_call(
     environment: Mapping[str, str],
     runner: CommandRunner,
     timeout_seconds: float,
+    failure_code: ReferenceTargetFailureCode,
 ) -> bytes:
     try:
         result = runner(
-            [aws_cli, *arguments, "--no-cli-pager"],
+            [aws_cli, *arguments, "--no-cli-pager", "--color", "off"],
             environment=environment,
             timeout_seconds=timeout_seconds,
         )
@@ -1087,12 +1127,14 @@ def _aws_call(
         ):
             raise ValueError
         return result.stdout
-    except ReferenceTargetError:
-        raise
     except Exception:
-        raise ReferenceTargetError(
-            ReferenceTargetFailureCode.AWS_COMMAND_FAILED
-        ) from None
+        raise ReferenceTargetError(failure_code) from None
+
+
+def _progress(message: str) -> None:
+    """Write one fixed non-sensitive operator stage immediately."""
+    sys.stdout.write(f"{message}\n")
+    sys.stdout.flush()
 
 
 def _require_aws_cli_v2(
@@ -1100,19 +1142,25 @@ def _require_aws_cli_v2(
     environment: Mapping[str, str],
     runner: CommandRunner,
 ) -> None:
-    result = runner(
-        [aws_cli, "--version"],
-        environment=environment,
-        timeout_seconds=AWS_COMMAND_TIMEOUT_SECONDS,
-    )
-    combined = result.stdout + result.stderr
-    if (
-        type(result) is not CommandResult
-        or result.returncode != 0
-        or len(combined) > 4096
-        or not combined.startswith(b"aws-cli/2.")
-    ):
-        raise ReferenceTargetError(ReferenceTargetFailureCode.AWS_CLI_UNAVAILABLE)
+    try:
+        result = runner(
+            [aws_cli, "--version"],
+            environment=environment,
+            timeout_seconds=AWS_COMMAND_TIMEOUT_SECONDS,
+        )
+        if type(result) is not CommandResult:
+            raise ValueError
+        combined = result.stdout + result.stderr
+        if (
+            result.returncode != 0
+            or len(combined) > 4096
+            or not combined.startswith(b"aws-cli/2.")
+        ):
+            raise ValueError
+    except Exception:
+        raise ReferenceTargetError(
+            ReferenceTargetFailureCode.AWS_CLI_UNAVAILABLE
+        ) from None
 
 
 def _aws_cli_path() -> str:

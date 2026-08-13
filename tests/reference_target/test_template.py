@@ -14,7 +14,6 @@ _TEMPLATE = _ROOT / "examples/aws/reference_target/template.json"
 _HANDLER = _ROOT / "examples/aws/reference_target/handler.py"
 _FUNCTION_MEMORY_MIB = 128
 _FUNCTION_TIMEOUT_SECONDS = 10
-_RESERVED_CONCURRENCY = 2
 _API_CONTRACT_RESOURCES = ("RestApi", "RetrieveResource", "RetrieveMethod")
 _EXPECTED_RESOURCE_TYPES = {
     "ApiDeploymentE067fffcfc0a": "AWS::ApiGateway::Deployment",
@@ -68,7 +67,7 @@ def test_template_has_one_fixed_authenticated_route_and_bounded_runtime() -> Non
     assert function["Runtime"] == "python3.14"
     assert function["MemorySize"] == _FUNCTION_MEMORY_MIB
     assert function["Timeout"] == _FUNCTION_TIMEOUT_SECONDS
-    assert function["ReservedConcurrentExecutions"] == _RESERVED_CONCURRENCY
+    assert "ReservedConcurrentExecutions" not in function
     assert resources["EvidenceLogGroup"]["Properties"]["RetentionInDays"] == 1
     assert resources["ApiStage"]["Properties"]["TracingEnabled"] is False
     assert resources["ApiStage"]["Properties"]["MethodSettings"][0] == {

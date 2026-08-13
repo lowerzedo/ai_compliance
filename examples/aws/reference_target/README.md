@@ -63,8 +63,7 @@ future protected release gate to approved short-lived credentials or OIDC.
 - one regional REST API with exactly one `AWS_IAM`-authorized `POST /retrieve`
   method and no CORS, API key, custom domain, cache, tracing, access-body log,
   or public Lambda URL;
-- one bounded Python 3.14 Lambda with 128 MiB, a ten-second timeout, and
-  reserved concurrency of two;
+- one bounded Python 3.14 Lambda with 128 MiB and a ten-second timeout;
 - one on-demand DynamoDB table containing exactly two synthetic documents;
 - one one-day CloudWatch log group and one fixed evidence stream;
 - requester A and B roles, each with only `execute-api:Invoke` on the exact
@@ -182,6 +181,20 @@ sandbox. The `ExpiresOn` tag is only an operator-visible cleanup reminder; it
 does not schedule or perform deletion. Destroy the stack promptly after the
 isolated and vulnerable runs, then verify that CloudFormation reports the
 stack deleted.
+
+The Lambda intentionally does not reserve function concurrency. Some new or
+low-quota sandbox accounts enforce an unreserved-concurrency floor of ten and
+reject any function reservation. Only the exact IAM-authenticated API Gateway
+route can invoke this function, and that stage retains the fixed two-request-
+per-second rate and four-request burst limits. This preserves a bounded test
+ingress without requiring an account-level quota increase. Do not leave the
+fixture deployed as a general service.
+
+Deploy and destroy print only fixed progress stages and stable failure
+categories. Raw AWS CLI output remains suppressed because it can contain
+account identifiers, ARNs, resource names, request IDs, local paths, and SDK
+diagnostics. The most recently printed stage identifies where a redacted
+failure occurred.
 
 ## 4. Run the existing workflow
 

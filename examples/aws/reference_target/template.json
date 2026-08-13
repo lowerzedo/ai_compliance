@@ -241,7 +241,6 @@
         },
         "Handler": "index.lambda_handler",
         "MemorySize": 128,
-        "ReservedConcurrentExecutions": 2,
         "Role": {
           "Fn::GetAtt": [
             "LambdaExecutionRole",
