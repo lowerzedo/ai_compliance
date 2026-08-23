@@ -23,9 +23,7 @@ const knownStageLabels: Readonly<Record<string, string>> = {
   validation: "Validating configuration",
   authorization: "Authorizing exact plan",
   identity_acquisition: "Acquiring scoped identities",
-  first_direction: "Testing first direction",
   direction_one: "Testing first direction",
-  second_direction: "Testing second direction",
   direction_two: "Testing second direction",
   evaluation: "Evaluating observations",
   finalization: "Finalizing evidence",
@@ -234,7 +232,7 @@ export function Notice({
   title,
   children,
 }: {
-  tone: "info" | "danger" | "warning" | "success";
+  tone: "danger" | "warning";
   title: string;
   children: ReactNode;
 }): ReactNode {
@@ -243,17 +241,7 @@ export function Notice({
       className={`notice notice-${tone}`}
       role={tone === "danger" ? "alert" : "status"}
     >
-      <StatusIcon
-        kind={
-          tone === "success"
-            ? "ready"
-            : tone === "info"
-              ? "running"
-              : tone === "warning"
-                ? "INCONCLUSIVE"
-                : "ERROR"
-        }
-      />
+      <StatusIcon kind={tone === "warning" ? "INCONCLUSIVE" : "ERROR"} />
       <div>
         <strong>{title}</strong>
         <div>{children}</div>

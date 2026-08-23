@@ -59,6 +59,7 @@ _EVENT_TIME = datetime.fromtimestamp(_EVENT_MILLISECONDS / 1000, tz=UTC)
 _COLLECTED_AT = _EVENT_TIME + timedelta(seconds=10)
 _LOG_STREAM = "retrieval-events"
 _HTTP_OK = 200
+_EXPECTED_VISIBILITY_CALLS = 2
 
 
 @dataclass(slots=True)
@@ -90,13 +91,13 @@ class _PutLogs:
 
 @dataclass(slots=True)
 class _FilterLogs:
-    response: Mapping[str, object]
+    responses: list[Mapping[str, object]]
     calls: list[dict[str, object]] = field(default_factory=list)
 
     def filter_log_events(self, **kwargs: object) -> Mapping[str, object]:
-        """Return one SDK-shaped page derived from a captured handler write."""
+        """Return queued SDK pages derived from a captured handler write."""
         self.calls.append(dict(kwargs))
-        return self.response
+        return self.responses.pop(0)
 
 
 @dataclass(slots=True)
@@ -171,6 +172,7 @@ def test_handler_telemetry_drives_reciprocal_engine_result(  # noqa: PLR0915
         clock_skew_tolerance=timedelta(seconds=30),
         clock=lambda: _COLLECTED_AT,
         monotonic=lambda: 0.0,
+        sleep=lambda _delay: None,
     )
     action_results: list[ActionExecutionResult] = []
     probe_results: list[ProbeResult] = []
@@ -213,10 +215,13 @@ def test_handler_telemetry_drives_reciprocal_engine_result(  # noqa: PLR0915
         declared_probe = probes[declared_action.id]
         assert isinstance(declared_probe, CloudWatchLogsProbe)
         filter_client = _FilterLogs(
-            _filter_response(
-                captured,
-                event_id=f"synthetic-event-{declared_action.id}",
-            )
+            [
+                _empty_filter_response(captured),
+                _filter_response(
+                    captured,
+                    event_id=f"synthetic-event-{declared_action.id}",
+                ),
+            ],
         )
         session = _LogsSession(filter_client)
         evidence_identity = AwsScopedIdentity(
@@ -238,7 +243,8 @@ def test_handler_telemetry_drives_reciprocal_engine_result(  # noqa: PLR0915
         probe_results.append(probe_result)
 
         assert session.regions == [REGION]
-        assert len(filter_client.calls) == 1
+        assert len(filter_client.calls) == _EXPECTED_VISIBILITY_CALLS
+        assert filter_client.calls[0] == filter_client.calls[1]
         assert filter_client.calls[0]["logGroupName"] == descriptor.log_group_name
         assert filter_client.calls[0]["filterPattern"] == (
             f'{{ $.correlationId = "{correlation}" }}'
@@ -345,6 +351,23 @@ def _filter_response(
                 "timestamp": timestamp,
             }
         ],
+        "searchedLogStreams": [
+            {
+                "logStreamName": stream,
+                "searchedCompletely": True,
+            }
+        ],
+    }
+
+
+def _empty_filter_response(
+    captured: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Return a complete empty page representing delayed log visibility."""
+    stream = cast("str", captured["logStreamName"])
+    return {
+        "ResponseMetadata": {"HTTPStatusCode": 200},
+        "events": [],
         "searchedLogStreams": [
             {
                 "logStreamName": stream,

@@ -47,6 +47,7 @@ dev = [
 include = [
   "/LICENSE",
   "/README.md",
+  "/assets/screenshots",
   "/examples",
   "/pyproject.toml",
   "/schemas",

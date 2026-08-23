@@ -303,9 +303,11 @@ protected live run must still establish two AWS behaviors that mocks cannot:
 1. API Gateway supplies the IAM caller ARN in the exact fail-closed form the
    handler expects.
 1. A synchronously accepted `PutLogEvents` record becomes visible to
-   `FilterLogEvents` before the current one-shot evidence query completes.
+   `FilterLogEvents` within the probe's fixed evidence-only polling bound.
 
-Never repeat an application action just because evidence visibility is late.
-If the protected run demonstrates propagation flakiness, the next narrow
-engine change is bounded evidence polling for the same exact correlation,
-within the existing five-minute orchestration budget.
+The probe repeats only a complete empty lookup for the same exact correlation
+on a fixed 1, 2, 4, 4-second schedule. Pagination and polling share the existing
+five-page and 15-second collection bounds. It never repeats an application
+action, changes the correlation or window, or retries malformed, partial,
+ambiguous, stale, future-dated, oversized, identity-invalid, or SDK-failure
+results. Persistent absence remains `INCONCLUSIVE`, never `PASS`.

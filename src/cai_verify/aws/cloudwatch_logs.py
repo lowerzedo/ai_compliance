@@ -35,6 +35,7 @@ from cai_verify.config.models import ObservationKind
 from cai_verify.core import JsonValue, RedactedValue
 from cai_verify.plugins import (
     PLUGIN_API_VERSION,
+    ActionOutcome,
     EvidenceFreshness,
     EvidenceSource,
     Observation,
@@ -66,6 +67,8 @@ MAX_CLOUDWATCH_RETRIEVAL_MARKER_BYTES = 1024
 MAX_CLOUDWATCH_RETRIEVAL_TOTAL_MARKER_BYTES = 3 * 1024
 MAX_CLOUDWATCH_RETRIEVAL_CANARY_BYTES = MAX_RETRIEVAL_CANARY_BYTES
 MAX_BEDROCK_MODEL_ID_BYTES = 2 * 1024
+
+_RETRIEVAL_POLL_DELAYS_SECONDS = (1.0, 2.0, 4.0, 4.0)
 
 _MAX_FRESHNESS = timedelta(hours=24)
 _MAX_CLOCK_SKEW = timedelta(minutes=5)
@@ -317,6 +320,12 @@ class _Collection:
         return not self.failures
 
 
+@dataclass(frozen=True, slots=True)
+class _QueryOutcome:
+    collection: _Collection
+    collected_at: datetime
+
+
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CloudWatchLogsProbeAdapter:
@@ -331,6 +340,10 @@ class CloudWatchLogsProbeAdapter:
     )
     monotonic: Callable[[], float] = field(
         default=time.monotonic,
+        repr=False,
+    )
+    sleep: Callable[[float], None] = field(
+        default=time.sleep,
         repr=False,
     )
 
@@ -476,7 +489,7 @@ class CloudWatchLogsProbeAdapter:
                 ),
             )
         else:
-            collection = self._query(
+            outcome = self._query(
                 client,
                 probe=probe,
                 correlation_id=correlation_id,
@@ -488,7 +501,14 @@ class CloudWatchLogsProbeAdapter:
                 max_age=max_age,
                 window=window,
                 collection_started=collection_started,
+                identity=identity,
+                target=target,
+                action_succeeded=(
+                    request.action_result.outcome is ActionOutcome.SUCCEEDED
+                ),
             )
+            collection = outcome.collection
+            collected_at = outcome.collected_at
         return _probe_result(
             probe,
             collected_at=collected_at,
@@ -633,34 +653,142 @@ class CloudWatchLogsProbeAdapter:
         max_age: timedelta,
         window: _QueryWindow,
         collection_started: float,
-    ) -> _Collection:
+        identity: AwsScopedIdentity,
+        target: object,
+        action_succeeded: bool,
+    ) -> _QueryOutcome:
         failures: set[CloudWatchLogsProbeFailureCode] = set()
         raw_events: list[_RawEvent] = []
         total_bytes = 0
         events_examined = 0
-        next_token: str | None = None
-        seen_tokens: set[str] = set()
+        pages_used = 0
+        retry_index = 0
+        current_collected_at = collected_at
 
-        for page_number in range(1, MAX_CLOUDWATCH_PAGES + 1):
-            arguments: dict[str, object] = {
-                "endTime": window.end_milliseconds,
-                "filterPattern": (f'{{ $.correlationId = "{correlation_id}" }}'),
-                "interleaved": True,
-                "limit": MAX_CLOUDWATCH_EVENTS + 1,
-                "logGroupName": probe.log_group,
-                "startFromHead": True,
-                "startTime": window.start_milliseconds,
-                "unmask": False,
-            }
-            if next_token is not None:
-                arguments["nextToken"] = next_token
-            try:
-                response = client.filter_log_events(**arguments)
-            except Exception as error:  # noqa: BLE001 - SDK text is discarded.
-                failures.add(_sdk_failure(error))
-                failures.add(CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE)
+        while pages_used < MAX_CLOUDWATCH_PAGES:
+            next_token: str | None = None
+            seen_tokens: set[str] = set()
+            terminal_scan = False
+            while pages_used < MAX_CLOUDWATCH_PAGES:
+                remaining_events = MAX_CLOUDWATCH_EVENTS - events_examined
+                if remaining_events <= 0:
+                    failures.add(
+                        CloudWatchLogsProbeFailureCode.EVENT_LIMIT_EXCEEDED,
+                    )
+                    break
+                arguments: dict[str, object] = {
+                    "endTime": window.end_milliseconds,
+                    "filterPattern": (f'{{ $.correlationId = "{correlation_id}" }}'),
+                    "interleaved": True,
+                    "limit": remaining_events + 1,
+                    "logGroupName": probe.log_group,
+                    "startFromHead": True,
+                    "startTime": window.start_milliseconds,
+                    "unmask": False,
+                }
+                if next_token is not None:
+                    arguments["nextToken"] = next_token
+                pages_used += 1
+                try:
+                    response = client.filter_log_events(**arguments)
+                except Exception as error:  # noqa: BLE001 - SDK text is discarded.
+                    failures.add(_sdk_failure(error))
+                    failures.add(CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE)
+                    break
+                if (
+                    self.monotonic() - collection_started
+                    >= MAX_CLOUDWATCH_QUERY_SECONDS
+                ):
+                    failures.update(
+                        {
+                            CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE,
+                            CloudWatchLogsProbeFailureCode.QUERY_TIMEOUT,
+                        },
+                    )
+                    break
+                page_events, page_token, page_failures = _validated_page(response)
+                failures.update(page_failures)
+                for raw_record in page_events:
+                    events_examined += 1
+                    if events_examined > MAX_CLOUDWATCH_EVENTS:
+                        failures.add(
+                            CloudWatchLogsProbeFailureCode.EVENT_LIMIT_EXCEEDED,
+                        )
+                        break
+                    event, message_bytes, event_failures = _validated_event_record(
+                        raw_record,
+                    )
+                    failures.update(event_failures)
+                    total_bytes += message_bytes
+                    if total_bytes > MAX_CLOUDWATCH_TOTAL_BYTES:
+                        failures.add(
+                            CloudWatchLogsProbeFailureCode.TOTAL_BYTES_EXCEEDED,
+                        )
+                        break
+                    if event is not None:
+                        raw_events.append(event)
+                if (
+                    CloudWatchLogsProbeFailureCode.TOTAL_BYTES_EXCEEDED in failures
+                    or CloudWatchLogsProbeFailureCode.EVENT_LIMIT_EXCEEDED in failures
+                ):
+                    break
+                if page_token is None:
+                    terminal_scan = True
+                    break
+                if page_token in seen_tokens:
+                    failures.update(
+                        {
+                            CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE,
+                            CloudWatchLogsProbeFailureCode.PAGINATION_LIMIT_EXCEEDED,
+                        },
+                    )
+                    break
+                seen_tokens.add(page_token)
+                next_token = page_token
+                if pages_used == MAX_CLOUDWATCH_PAGES:
+                    failures.update(
+                        {
+                            CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE,
+                            CloudWatchLogsProbeFailureCode.PAGINATION_LIMIT_EXCEEDED,
+                        },
+                    )
+
+            parsed_for_poll, poll_failures = _normalize_events(
+                raw_events,
+                correlation_id=correlation_id,
+                canary=canary,
+                bedrock=bedrock,
+                retrieval=retrieval,
+                expected_region=expected_region,
+                requested=frozenset(probe.observations),
+                collected_at=current_collected_at,
+                max_age=max_age,
+                clock_skew_tolerance=self.clock_skew_tolerance,
+                window=window,
+            )
+            failures.update(poll_failures)
+            retrieval_events = tuple(
+                event
+                for event in parsed_for_poll
+                if event.kind is ObservationKind.RETRIEVAL_CANARY
+            )
+            retryable_missing = (
+                terminal_scan
+                and action_succeeded
+                and probe.observations == (ObservationKind.RETRIEVAL_CANARY,)
+                and not failures
+                and not retrieval_events
+                and events_examined == 0
+                and total_bytes == 0
+                and retry_index < len(_RETRIEVAL_POLL_DELAYS_SECONDS)
+                and pages_used < MAX_CLOUDWATCH_PAGES
+            )
+            if not retryable_missing:
                 break
-            if self.monotonic() - collection_started > MAX_CLOUDWATCH_QUERY_SECONDS:
+
+            delay = _RETRIEVAL_POLL_DELAYS_SECONDS[retry_index]
+            elapsed = self.monotonic() - collection_started
+            if elapsed < 0 or elapsed + delay >= MAX_CLOUDWATCH_QUERY_SECONDS:
                 failures.update(
                     {
                         CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE,
@@ -668,51 +796,54 @@ class CloudWatchLogsProbeAdapter:
                     },
                 )
                 break
-            page_events, page_token, page_failures = _validated_page(response)
-            failures.update(page_failures)
-            for raw_record in page_events:
-                events_examined += 1
-                if events_examined > MAX_CLOUDWATCH_EVENTS:
-                    failures.add(
-                        CloudWatchLogsProbeFailureCode.EVENT_LIMIT_EXCEEDED,
-                    )
-                    break
-                event, message_bytes, event_failures = _validated_event_record(
-                    raw_record,
+            try:
+                self.sleep(delay)
+            except Exception:  # noqa: BLE001 - sleeper diagnostics are discarded.
+                failures.update(
+                    {
+                        CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE,
+                        CloudWatchLogsProbeFailureCode.QUERY_TIMEOUT,
+                    },
                 )
-                failures.update(event_failures)
-                total_bytes += message_bytes
-                if total_bytes > MAX_CLOUDWATCH_TOTAL_BYTES:
-                    failures.add(
-                        CloudWatchLogsProbeFailureCode.TOTAL_BYTES_EXCEEDED,
-                    )
-                    break
-                if event is not None:
-                    raw_events.append(event)
+                break
+            elapsed_after_wait = self.monotonic() - collection_started
             if (
-                CloudWatchLogsProbeFailureCode.TOTAL_BYTES_EXCEEDED in failures
-                or CloudWatchLogsProbeFailureCode.EVENT_LIMIT_EXCEEDED in failures
+                elapsed_after_wait < elapsed
+                or elapsed_after_wait >= MAX_CLOUDWATCH_QUERY_SECONDS
             ):
-                break
-            if page_token is None:
-                break
-            if page_token in seen_tokens:
                 failures.update(
                     {
                         CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE,
-                        CloudWatchLogsProbeFailureCode.PAGINATION_LIMIT_EXCEEDED,
+                        CloudWatchLogsProbeFailureCode.QUERY_TIMEOUT,
                     },
                 )
                 break
-            seen_tokens.add(page_token)
-            next_token = page_token
-            if page_number == MAX_CLOUDWATCH_PAGES:
+            next_collected_at = _normalized_time(
+                self.clock(),
+                field_name="CloudWatch Logs probe clock",
+            )
+            if next_collected_at < current_collected_at:
                 failures.update(
                     {
                         CloudWatchLogsProbeFailureCode.PARTIAL_RESPONSE,
-                        CloudWatchLogsProbeFailureCode.PAGINATION_LIMIT_EXCEEDED,
+                        CloudWatchLogsProbeFailureCode.QUERY_TIMEOUT,
                     },
                 )
+                break
+            current_collected_at = next_collected_at
+            if not _valid_target_and_identity(
+                identity,
+                target,
+                current_collected_at,
+            ):
+                failures.add(
+                    CloudWatchLogsProbeFailureCode.IDENTITY_BOUNDARY_INVALID,
+                )
+                break
+            if window.start < current_collected_at - max_age:
+                failures.add(CloudWatchLogsProbeFailureCode.STALE_ACTION)
+                break
+            retry_index += 1
 
         parsed, parse_failures = _normalize_events(
             raw_events,
@@ -722,7 +853,7 @@ class CloudWatchLogsProbeAdapter:
             retrieval=retrieval,
             expected_region=expected_region,
             requested=frozenset(probe.observations),
-            collected_at=collected_at,
+            collected_at=current_collected_at,
             max_age=max_age,
             clock_skew_tolerance=self.clock_skew_tolerance,
             window=window,
@@ -755,7 +886,7 @@ class CloudWatchLogsProbeAdapter:
             )
         if (
             CloudWatchLogsProbeFailureCode.QUERY_TIMEOUT not in failures
-            and self.monotonic() - collection_started > MAX_CLOUDWATCH_QUERY_SECONDS
+            and self.monotonic() - collection_started >= MAX_CLOUDWATCH_QUERY_SECONDS
         ):
             failures.update(
                 {
@@ -763,9 +894,12 @@ class CloudWatchLogsProbeAdapter:
                     CloudWatchLogsProbeFailureCode.QUERY_TIMEOUT,
                 },
             )
-        return _Collection(
-            events=parsed,
-            failures=frozenset(failures),
+        return _QueryOutcome(
+            collection=_Collection(
+                events=parsed,
+                failures=frozenset(failures),
+            ),
+            collected_at=current_collected_at,
         )
 
 

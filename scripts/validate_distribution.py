@@ -35,6 +35,10 @@ _REFERENCE_TARGET_PARENT_FILES = (
     "examples/__init__.py",
     "examples/aws/__init__.py",
 )
+_README_SCREENSHOT_FILENAMES = (
+    "console-evidence-history.jpg",
+    "console-plan-review.jpg",
+)
 _UI_GENERATED_DIRECTORIES = ("dist", "node_modules")
 _UI_STATIC_DIRECTORY = PROJECT_ROOT / "src/cai_verify/ui/static"
 
@@ -297,6 +301,7 @@ def _validate_inventory(  # noqa: C901, PLR0912 - explicit archive checks stay v
             ):
                 message = f"source distribution omitted AWS example {filename}"
                 raise RuntimeError(message)
+        _validate_readme_screenshot_inventory(archive, source_names)
         _validate_reference_target_inventory(archive, source_names)
         for relative_path, expected in _ui_source_inventory().items():
             suffix = f"/ui/{relative_path}"
@@ -314,6 +319,29 @@ def _validate_inventory(  # noqa: C901, PLR0912 - explicit archive checks stay v
                     f"{relative_path}"
                 )
                 raise RuntimeError(message)
+
+
+def _validate_readme_screenshot_inventory(
+    archive: tarfile.TarFile,
+    source_names: set[str],
+) -> None:
+    """Require the README's repository screenshots in the source archive."""
+    for filename in _README_SCREENSHOT_FILENAMES:
+        expected = PROJECT_ROOT / "assets" / "screenshots" / filename
+        matches = [
+            name
+            for name in source_names
+            if name.endswith(f"/assets/screenshots/{filename}")
+        ]
+        if len(matches) != 1:
+            message = f"source distribution omitted README screenshot {filename}"
+            raise RuntimeError(message)
+        extracted = archive.extractfile(matches[0])
+        if extracted is None or extracted.read() != expected.read_bytes():
+            message = (
+                f"source distribution README screenshot differs from source {filename}"
+            )
+            raise RuntimeError(message)
 
 
 def _validate_reference_target_inventory(

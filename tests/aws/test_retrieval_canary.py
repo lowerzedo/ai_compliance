@@ -89,6 +89,25 @@ class _LogsSession:
         return self.client_value
 
 
+@dataclass(slots=True)
+class _AdvancingClock:
+    seconds: float = 0.0
+    delays: list[float] = field(default_factory=list)
+
+    def wall_time(self) -> datetime:
+        """Return deterministic UTC wall time advanced by synthetic sleeps."""
+        return _COLLECTED_AT + timedelta(seconds=self.seconds)
+
+    def monotonic_time(self) -> float:
+        """Return deterministic elapsed time advanced by synthetic sleeps."""
+        return self.seconds
+
+    def sleep(self, delay: float) -> None:
+        """Advance both clocks without waiting in real time."""
+        self.delays.append(delay)
+        self.seconds += delay
+
+
 @dataclass(frozen=True, slots=True)
 class _EchoActionTransport:
     def send(
@@ -329,7 +348,11 @@ def test_missing_multiple_and_duplicate_records_are_deterministic() -> None:
     missing = _adapter().collect_evidence(
         _request(
             _suite(),
-            identity=_identity(_LogsClient([_page()]))[0],
+            identity=_identity(
+                _LogsClient(
+                    [_page() for _ in range(cloudwatch_module.MAX_CLOUDWATCH_PAGES)],
+                ),
+            )[0],
         ),
     )
     first = _retrieval_event("first")
@@ -369,6 +392,226 @@ def test_missing_multiple_and_duplicate_records_are_deterministic() -> None:
     for result in (missing, multiple, conflicting):
         assert result.freshness.source_time is None
         _assert_unknown_retrieval_facts(_retrieval(result))
+
+
+def test_successful_retrieval_polls_for_delayed_same_correlation_evidence() -> None:
+    """A successful action gets bounded retries without changing its query."""
+    clock = _AdvancingClock()
+    client = _LogsClient(
+        [
+            _page(),
+            _page(_retrieval_event("delayed-retrieval")),
+        ],
+    )
+    adapter = CloudWatchLogsProbeAdapter(
+        environment=_environment(),
+        suite_max_age=timedelta(minutes=5),
+        clock_skew_tolerance=timedelta(seconds=30),
+        clock=clock.wall_time,
+        monotonic=clock.monotonic_time,
+        sleep=clock.sleep,
+    )
+
+    result = adapter.collect_evidence(
+        _request(_suite(), identity=_identity(client)[0]),
+    )
+
+    assert _retrieval(result)["evidence_complete"] is True
+    assert _retrieval(result)["accepted_correlated_records"] == 1
+    assert result.freshness.collected_at == _COLLECTED_AT + timedelta(seconds=1)
+    assert clock.delays == [1.0]
+    assert client.calls == [_expected_filter_request(), _expected_filter_request()]
+
+
+def test_missing_retrieval_polling_exhausts_fixed_page_and_delay_limits() -> None:
+    """Persistent absence stays inconclusive after a fixed bounded schedule."""
+    clock = _AdvancingClock()
+    client = _LogsClient(
+        [_page() for _ in range(cloudwatch_module.MAX_CLOUDWATCH_PAGES)],
+    )
+    adapter = CloudWatchLogsProbeAdapter(
+        environment=_environment(),
+        suite_max_age=timedelta(minutes=5),
+        clock_skew_tolerance=timedelta(seconds=30),
+        clock=clock.wall_time,
+        monotonic=clock.monotonic_time,
+        sleep=clock.sleep,
+    )
+
+    result = adapter.collect_evidence(
+        _request(_suite(), identity=_identity(client)[0]),
+    )
+
+    assert _retrieval(result)["error_category"] == "retrieval_record_missing"
+    assert _retrieval(result)["partial"] is False
+    assert len(client.calls) == cloudwatch_module.MAX_CLOUDWATCH_PAGES
+    assert clock.delays == [1.0, 2.0, 4.0, 4.0]
+    assert result.freshness.collected_at == _COLLECTED_AT + timedelta(seconds=11)
+    _assert_unknown_retrieval_facts(_retrieval(result))
+
+
+def test_polling_shares_the_global_pagination_page_budget() -> None:
+    """Pagination and visibility retries cannot each consume five pages."""
+    clock = _AdvancingClock()
+    client = _LogsClient(
+        [
+            _page(
+                pagination_token="synthetic-second-page",  # noqa: S106 - cursor.
+            ),
+            _page(),
+            _page(),
+            _page(),
+            _page(),
+        ],
+    )
+    adapter = CloudWatchLogsProbeAdapter(
+        environment=_environment(),
+        suite_max_age=timedelta(minutes=5),
+        clock_skew_tolerance=timedelta(seconds=30),
+        clock=clock.wall_time,
+        monotonic=clock.monotonic_time,
+        sleep=clock.sleep,
+    )
+
+    result = adapter.collect_evidence(
+        _request(_suite(), identity=_identity(client)[0]),
+    )
+
+    assert _retrieval(result)["error_category"] == "retrieval_record_missing"
+    assert len(client.calls) == cloudwatch_module.MAX_CLOUDWATCH_PAGES
+    assert client.calls[1]["nextToken"] == "synthetic-second-page"
+    assert all("nextToken" not in call for call in client.calls[2:])
+    assert clock.delays == [1.0, 2.0, 4.0]
+
+
+def test_polling_revalidates_identity_after_each_wait() -> None:
+    """An identity that expires while waiting cannot issue another SDK call."""
+    clock = _AdvancingClock()
+    client = _LogsClient([_page()])
+    identity, _ = _identity(
+        client,
+        expires_at=_COLLECTED_AT + timedelta(milliseconds=500),
+    )
+    adapter = CloudWatchLogsProbeAdapter(
+        environment=_environment(),
+        suite_max_age=timedelta(minutes=5),
+        clock_skew_tolerance=timedelta(seconds=30),
+        clock=clock.wall_time,
+        monotonic=clock.monotonic_time,
+        sleep=clock.sleep,
+    )
+
+    result = adapter.collect_evidence(
+        _request(_suite(), identity=identity),
+    )
+
+    assert _retrieval(result)["error_category"] == "identity_boundary_invalid"
+    assert len(client.calls) == 1
+    assert clock.delays == [1.0]
+    assert result.freshness.collected_at == _COLLECTED_AT + timedelta(seconds=1)
+    _assert_unknown_retrieval_facts(_retrieval(result))
+
+
+def test_polling_revalidates_the_complete_action_window_after_waiting() -> None:
+    """A delay cannot make the action interval stale and still yield facts."""
+    clock = _AdvancingClock()
+    client = _LogsClient([_page()])
+    started_at = _COLLECTED_AT - timedelta(
+        minutes=2,
+        seconds=29,
+        milliseconds=500,
+    )
+    adapter = CloudWatchLogsProbeAdapter(
+        environment=_environment(),
+        suite_max_age=timedelta(minutes=5),
+        clock_skew_tolerance=timedelta(seconds=30),
+        clock=clock.wall_time,
+        monotonic=clock.monotonic_time,
+        sleep=clock.sleep,
+    )
+
+    result = adapter.collect_evidence(
+        _request(
+            _suite(),
+            identity=_identity(client)[0],
+            action_result=_action_result(
+                started_at=started_at,
+                completed_at=started_at + timedelta(seconds=10),
+            ),
+        ),
+    )
+
+    assert _retrieval(result)["error_category"] == "stale_action"
+    assert _retrieval(result)["stale"] is True
+    assert len(client.calls) == 1
+    assert clock.delays == [1.0]
+    assert result.freshness.collected_at == _COLLECTED_AT + timedelta(seconds=1)
+    _assert_unknown_retrieval_facts(_retrieval(result))
+
+
+def test_unsuccessful_action_does_not_poll_for_retrieval_evidence() -> None:
+    """Evidence visibility retries never reinterpret or repeat a failed action."""
+    client = _LogsClient([_page()])
+
+    result = _adapter().collect_evidence(
+        _request(
+            _suite(),
+            identity=_identity(client)[0],
+            action_result=_action_result(outcome=ActionOutcome.DENIED),
+        ),
+    )
+
+    assert _retrieval(result)["error_category"] == "retrieval_record_missing"
+    assert len(client.calls) == 1
+    _assert_unknown_retrieval_facts(_retrieval(result))
+
+
+def test_polling_delay_that_cannot_fit_is_a_partial_timeout() -> None:
+    """An abbreviated visibility schedule is never a complete missing result."""
+    times = iter([0.0, 14.5, 14.5, 14.5])
+    client = _LogsClient([_page()])
+
+    result = CloudWatchLogsProbeAdapter(
+        environment=_environment(),
+        suite_max_age=timedelta(minutes=5),
+        clock_skew_tolerance=timedelta(seconds=30),
+        clock=lambda: _COLLECTED_AT,
+        monotonic=lambda: next(times),
+        sleep=lambda _delay: pytest.fail("deadline-bound polling must not wait"),
+    ).collect_evidence(
+        _request(_suite(), identity=_identity(client)[0]),
+    )
+
+    assert _retrieval(result)["error_category"] == "query_timeout"
+    assert _retrieval(result)["partial"] is True
+    assert len(client.calls) == 1
+    _assert_unknown_retrieval_facts(_retrieval(result))
+
+
+def test_polling_wait_failure_is_stable_partial_and_redacted() -> None:
+    """A failed local wait never exposes diagnostics or retries the SDK call."""
+
+    def failed_sleep(delay: float) -> None:
+        del delay
+        raise RuntimeError(_SDK_SECRET)
+
+    client = _LogsClient([_page()])
+    result = CloudWatchLogsProbeAdapter(
+        environment=_environment(),
+        suite_max_age=timedelta(minutes=5),
+        clock_skew_tolerance=timedelta(seconds=30),
+        clock=lambda: _COLLECTED_AT,
+        monotonic=lambda: 0.0,
+        sleep=failed_sleep,
+    ).collect_evidence(
+        _request(_suite(), identity=_identity(client)[0]),
+    )
+
+    assert _retrieval(result)["error_category"] == "query_timeout"
+    assert _retrieval(result)["partial"] is True
+    assert len(client.calls) == 1
+    assert _SDK_SECRET not in repr(result)
+    _assert_unknown_retrieval_facts(_retrieval(result))
 
 
 @pytest.mark.parametrize(
@@ -1262,6 +1505,7 @@ def _adapter(
         suite_max_age=timedelta(minutes=5),
         clock_skew_tolerance=timedelta(seconds=30),
         clock=lambda: _COLLECTED_AT,
+        sleep=lambda _delay: None,
     )
 
 
@@ -1326,12 +1570,13 @@ def _action_result(
     *,
     action_id: str = "unsigned-request",
     correlations: tuple[str, ...] = (_ACTION_CORRELATION,),
+    outcome: ActionOutcome = ActionOutcome.SUCCEEDED,
     started_at: datetime = _ACTION_STARTED,
     completed_at: datetime = _ACTION_COMPLETED,
 ) -> ActionExecutionResult:
     return ActionExecutionResult(
         action_id=action_id,
-        outcome=ActionOutcome.SUCCEEDED,
+        outcome=outcome,
         started_at=started_at,
         completed_at=completed_at,
         observed=RedactedValue(

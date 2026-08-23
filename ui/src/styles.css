@@ -29,7 +29,6 @@
   --warning-soft: oklch(0.95 0.025 80);
   --warning-ink: oklch(0.39 0.085 75);
   --focus: oklch(0.56 0.13 194);
-  --backdrop: oklch(0.08 0.005 220 / 0.45);
 
   --radius-sm: 6px;
   --radius-md: 10px;
@@ -68,7 +67,6 @@
   --warning-soft: oklch(0.28 0.04 80);
   --warning-ink: oklch(0.88 0.07 80);
   --focus: oklch(0.74 0.11 194);
-  --backdrop: oklch(0.04 0 0 / 0.7);
 }
 
 :root[data-theme="light"] {
@@ -98,7 +96,6 @@
     --warning-soft: oklch(0.28 0.04 80);
     --warning-ink: oklch(0.88 0.07 80);
     --focus: oklch(0.74 0.11 194);
-    --backdrop: oklch(0.04 0 0 / 0.7);
   }
 }
 
@@ -734,13 +731,6 @@ input:disabled,
   color: var(--warning-ink);
 }
 
-.notice-info,
-.notice-success {
-  border-color: color-mix(in oklch, var(--accent) 40%, var(--border));
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-}
-
 .empty-state {
   display: flex;
   min-height: 188px;
@@ -1228,12 +1218,6 @@ tbody td {
 .compact-issue-list {
   color: var(--danger-ink);
   font-size: 0.72rem;
-}
-
-.limitations-panel {
-  border-top: 1px solid var(--border);
-  margin-top: var(--space-6);
-  padding-top: var(--space-3);
 }
 
 details summary {
